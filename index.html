@@ -1915,12 +1915,27 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const clients = portfolioOf(vendorId);
     const occ = [];
     const lastDay = days[days.length-1];
+    // clientes sem visita registada (mensais, bimensais, trimestrais): em vez de todos começarem no 1.º dia, o 1.º alvo reparte-se
+    // uniformemente pelo mês (bimensal: pela 1.ª metade, porque a 2.ª visita vem 15 dias depois), agrupando por bairro
+    const spreadT = {};
+    {
+      const groups = {};
+      clients.forEach(c=>{
+        const iv = FREQ_DAYS[c.visitFrequency] || 30;
+        if(iv>=15 && !lastVisitDateOf(c.id)) (groups[iv] = groups[iv] || []).push(c);
+      });
+      Object.keys(groups).forEach(iv=>{
+        const g = groups[iv].sort((a,b)=> (a.neighborhood||'').localeCompare(b.neighborhood||'') || (a.name||'').localeCompare(b.name||''));
+        const span = +iv>=30 ? days.length : Math.max(1, Math.ceil(days.length/2));
+        g.forEach((c,i)=>{ spreadT[c.id] = days[Math.min(days.length-1, Math.floor(i*span/g.length))]; });
+      });
+    }
     clients.forEach(c=>{
       if(!FREQ_DAYS[c.visitFrequency]) out.noFreq++;
       if(c.lat==null || c.lng==null) out.noCoords++;
       const interval = FREQ_DAYS[c.visitFrequency] || 30;
       const last = lastVisitDateOf(c.id);
-      let t = last ? dateAdd(last, interval) : days[0];
+      let t = last ? dateAdd(last, interval) : (spreadT[c.id] || days[0]);
       const wait = last ? Math.round((new Date(days[0]+'T12:00:00') - new Date(last+'T12:00:00'))/86400000) : 9999;
       if(t < days[0]) t = days[0];
       let k = 0;
@@ -1930,16 +1945,30 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     occ.sort((a,b)=> a.target<b.target ? -1 : a.target>b.target ? 1 : b.wait-a.wait || a.c.name.localeCompare(b.c.name));
     const assigned = {}; // clientId -> [datas]
     const idxOf = t => { const i = days.findIndex(d=>d>=t); return i<0 ? days.length-1 : i; };
+    // Quota por dia: reparte as visitas do mês de forma uniforme por TODOS os dias úteis (as segundas pesam menos),
+    // em vez de encher os primeiros dias até ao máximo e deixar o fim do mês vazio.
+    const quota = {};
+    {
+      let rem = occ.length, L = 1;
+      while(L < perDay && days.reduce((a,d)=>a+Math.min(dayCap(d, perDay), L), 0) < occ.length) L++;
+      const w = days.map(d=>Math.min(dayCap(d, perDay), L));
+      let sw = w.reduce((a,b)=>a+b, 0);
+      days.forEach((d,i)=>{
+        const q = sw>0 ? Math.min(dayCap(d, perDay), Math.ceil(rem*w[i]/sw)) : 0;
+        quota[d] = q; rem -= q; sw -= w[i];
+      });
+    }
     occ.forEach(o=>{
       const start = idxOf(o.target);
       const slack = o.interval>=30 ? 6 : o.interval>=15 ? 3 : 2;
       const minGap = Math.floor(o.interval*0.5);
       const mine = assigned[o.c.id] = assigned[o.c.id] || [];
       let best = null;
+      let strict = true;
       const consider = (from, to)=>{
         for(let i=from; i<=to && i<days.length; i++){
           const d = days[i], list = out.days[d];
-          if(list.length >= dayCap(d, perDay)) continue;
+          if(list.length >= (strict ? quota[d] : dayCap(d, perDay))) continue;
           if(mine.some(x=>Math.abs((new Date(x+'T12:00:00')-new Date(d+'T12:00:00'))/86400000) < minGap || weekOf(x)===weekOf(d))) continue;
           const km = minKmToDay(o.c, list);
           const score = (i-start) + (list.length ? (km==null ? 1 : Math.min(km,30)*0.25) : 1);
@@ -1948,6 +1977,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       };
       consider(start, start+slack);
       if(!best) consider(start+slack+1, days.length-1);
+      if(!best){ strict = false; consider(start, days.length-1); }
       if(!best){ out.unscheduled.push(o.c.id); return; }
       out.days[best.d].push(o.c.id); mine.push(best.d);
     });
@@ -2049,7 +2079,17 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       });
       Object.keys(days).forEach(d=>{ days[d] = orderDayIds(days[d]); });
     }
-    const empties = dates.filter(d=>!(days[d]||[]).length);
+    // limiar mínimo por dia: dias úteis com bem menos visitas do que o normal (tipicamente o fim do mês) são completados.
+    // Na rota do Excel só se completam os dias 29-31 (a rota fixa não tem semana 5); na proposta automática, qualquer dia.
+    const sz0 = dates.map(d=>(days[d]||[]).length).filter(n=>n>0).sort((a,b)=>a-b);
+    const med0 = sz0.length ? sz0[Math.floor(sz0.length/2)] : 0;
+    const low = Math.max(1, Math.min(perDay, Math.ceil(med0*0.75)));
+    const needOf = d => {
+      const cap = dayCap(d, perDay); const len = (days[d]||[]).length;
+      if(useRoute && +d.slice(8,10) < 29 && len) return 0;
+      return Math.max(0, Math.min(cap, low) - len);
+    };
+    const empties = dates.filter(d=>needOf(d)>0);
     if(!empties.length) return filled;
     const pool = new Map();
     portfolioOf(vendorId).forEach(c=>pool.set(c.id, c));
@@ -2060,22 +2100,23 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const sizes = dates.map(d=>(days[d]||[]).length).filter(n=>n>0).sort((a,b)=>a-b);
     const median = sizes.length ? sizes[Math.floor(sizes.length/2)] : Math.min(perDay, 5);
     empties.forEach((d, ei)=>{
+      const cur = (days[d]||[]).slice();
       const cap = dayCap(d, perDay);
-      const target = Math.max(1, Math.min(cap, median, pool.size));
+      const target = Math.max(1, Math.min(cap, cur.length ? low : median, pool.size));
       const wk = weekOf(d);
       const inWeek = new Set();
       dates.forEach(x=>{ if(weekOf(x)===wk) (days[x]||[]).forEach(id=>inWeek.add(id)); });
       const near = new Set();
       [-1,1].forEach(k=>(days[dateAdd(d,k)]||[]).forEach(id=>near.add(id)));
-      const cands = Array.from(pool.values()).filter(c=>!inWeek.has(c.id)).map(c=>{
+      const cands = Array.from(pool.values()).filter(c=>!inWeek.has(c.id) && !cur.includes(c.id)).map(c=>{
         const lp = [lastVisitDateOf(c.id), ...dates.filter(x=>x<d && (days[x]||[]).includes(c.id))].sort().pop() || '';
         return { c, n: cnt[c.id]||0, adj: near.has(c.id)?1:0, last: lp };
       }).sort((a,b)=> a.adj-b.adj || a.n-b.n || (a.last<b.last ? -1 : a.last>b.last ? 1 : 0) || a.c.name.localeCompare(b.c.name));
       const left = empties.slice(ei).filter(x=>weekOf(x)===wk).length; // dias vazios que faltam nesta semana (incluindo este)
-      const share = Math.max(1, Math.ceil(cands.length / left)); // reparte os clientes disponíveis da semana pelos dias vazios
-      const pick = cands.slice(0, Math.min(target, share)).map(x=>x.c.id);
+      const share = Math.max(1, Math.ceil(cands.length / left)); // reparte os clientes disponíveis da semana pelos dias a completar
+      const pick = cands.slice(0, Math.min(Math.max(0, target - cur.length), share)).map(x=>x.c.id);
       if(!pick.length) return;
-      days[d] = orderDayIds(pick);
+      days[d] = (useRoute && cur.length) ? cur.concat(pick) : orderDayIds(cur.concat(pick));
       pick.forEach(id=>{ cnt[id] = (cnt[id]||0)+1; });
       filled.push(d);
     });
