@@ -1050,6 +1050,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function mapLink(lat,lng){
     return `https://www.google.com/maps?q=${lat},${lng}`;
   }
+  // Google Maps com o percurso desde a localização atual do telemóvel até ao cliente (sem GPS, procura pela morada)
+  function navLink(c){
+    if(c.lat!=null && c.lng!=null) return `https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}&travelmode=driving`;
+    if(!(c.address || c.neighborhood || c.city)) return '';
+    const q = [c.name, c.address, c.neighborhood, c.city].filter(Boolean).join(', ');
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+  }
+  function gpsText(c){ return (c.lat!=null && c.lng!=null) ? `${(+c.lat).toFixed(6)}, ${(+c.lng).toFixed(6)}` : ''; }
 
   function clientLocationText(c){
     const parts = [c.address, c.neighborhood, c.city].filter(Boolean);
@@ -3487,7 +3495,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           <div class="client-card">
             <div>
               <div class="client-name">${esc(c.name)}${clientNumTag(c)}</div>
-              <div class="client-addr">${esc(clientLocationText(c))}${c.lat!=null ? ` · <a href="${mapLink(c.lat,c.lng)}" target="_blank" rel="noopener">ver mapa</a>` : ''}</div>
+              <div class="client-addr">${esc(clientLocationText(c))}${c.lat!=null ? ` · <a href="${mapLink(c.lat,c.lng)}" target="_blank" rel="noopener">ver mapa</a> · <a href="${navLink(c)}" target="_blank" rel="noopener">como chegar</a> · <a href="#" onclick="App.copyGps('${c.id}'); return false;">copiar GPS</a>` : ''}</div>
               ${contactLine ? `<div class="client-addr">${contactLine}</div>` : ''}
               <div class="client-recency">${s.count ? `${s.count} visita(s) · ${fmtRecency(s.last)}` : 'nunca visitado'}</div>
               ${clientTagsHtml(c)}
@@ -4342,6 +4350,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
               ${c.legMeters!=null ? `<span class="chip status-neutral">${fmtKm(c.legMeters)} da paragem anterior</span>` : (c.lat==null ? `<span class="chip status-warn">sem coordenadas</span>` : '')}
               ${freqLabel ? `<span class="chip status-neutral">${esc(freqLabel)}</span>` : ''}
             </div>
+            ${c.lat!=null ? `<div class="hint mono" style="margin:5px 0 0;">GPS: ${gpsText(c)}</div>` : ''}
+            ${navLink(c) ? `<div class="row-wrap" style="gap:6px; margin-top:6px;">
+              <a class="btn btn-secondary btn-sm" style="text-decoration:none;" href="${navLink(c)}" target="_blank" rel="noopener">${icon('map')} ${c.lat!=null ? 'Como chegar' : 'Procurar no mapa'}</a>
+              ${c.lat!=null ? `<button class="btn btn-ghost btn-sm" onclick="App.copyGps('${c.id}')">Copiar GPS</button>` : ''}
+            </div>` : ''}
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
@@ -5221,7 +5234,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           <div class="client-card">
             <div>
               <div class="client-name">${esc(c.name)}${clientNumTag(c)}${c.clientNumber ? '' : ` <span class="chip status-warn" style="font-size:11px;">sem nº</span>`}</div>
-              <div class="client-addr">${esc(clientLocationText(c))}${c.lat!=null ? ` · <a href="${mapLink(c.lat,c.lng)}" target="_blank" rel="noopener">ver mapa</a>` : ''}</div>
+              <div class="client-addr">${esc(clientLocationText(c))}${c.lat!=null ? ` · <a href="${mapLink(c.lat,c.lng)}" target="_blank" rel="noopener">ver mapa</a> · <a href="${navLink(c)}" target="_blank" rel="noopener">como chegar</a> · <a href="#" onclick="App.copyGps('${c.id}'); return false;">copiar GPS</a>` : ''}</div>
               ${contactLine ? `<div class="client-addr">${contactLine}</div>` : ''}
               <div class="client-recency">${s.count ? `${s.count} visita(s) · ${fmtRecency(s.last)}` : 'nunca visitado'}${c.nuit ? ` · <span class="mono">NUIT ${esc(c.nuit)}</span>` : ''}</div>
               ${c.gpsUpdatedBy ? `<div class="client-addr">GPS atualizado por ${esc(c.gpsUpdatedBy)}${c.gpsUpdatedAt ? ' em ' + esc(fmtDateOnly(localDateStr(c.gpsUpdatedAt))) : ''}</div>` : ''}
@@ -7753,6 +7766,15 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     addToAgenda(clientId){
       if(!state.agenda.clientIds.includes(clientId)) state.agenda.clientIds.push(clientId);
       renderView();
+    },
+    async copyGps(clientId){
+      const c = clientById(clientId); const t = c ? gpsText(c) : ''; if(!t){ showToast('Este cliente ainda não tem GPS.'); return; }
+      let ok = false;
+      try{ await navigator.clipboard.writeText(t); ok = true; }catch(e){}
+      if(!ok){
+        try{ const ta = document.createElement('textarea'); ta.value = t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove(); }catch(e){}
+      }
+      showToast(ok ? `GPS copiado: ${t}` : `GPS: ${t}`);
     },
     removeFromAgenda(clientId){
       state.agenda.clientIds = state.agenda.clientIds.filter(id=>id!==clientId);
