@@ -871,7 +871,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     mgrEditClient:{ gps:null, gpsStatus:null },
     mgrEditVisitId:null,
     mgrEditVisitStatus:null,
-    mgrOrdersDate:null,
+    mgrOrdersDate:null, mgrOrdersFrom:null, mgrOrdersTo:null, mgrOrdersVendor:'',
     mgrReportPeriod:null,
     mgrReportCustomStart:null,
     mgrReportCustomEnd:null,
@@ -3722,7 +3722,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
 
         <div class="card stack" style="gap:12px;">
           <div class="section-title">5. Encomenda</div>
-          <div id="nvEncomenda" class="stack" style="gap:7px;"></div>
+          <div id="nvEncomenda" class="stack" style="gap:7px;" oninput="App.autoSaleStatus('nv')" onchange="App.autoSaleStatus('nv')"></div>
           <button class="btn btn-ghost" style="align-self:flex-start;" onclick="App.addOrderRow()">${icon('plus')} Adicionar produto à encomenda</button>
           <div class="stack" style="gap:10px; border-top:1px solid var(--border); padding-top:12px;">
             <div class="hint" style="margin:0;">Entrega — preencha só se registou uma encomenda. Pode confirmar mais tarde no Histórico.</div>
@@ -3732,9 +3732,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
 
         <div class="card stack" style="gap:12px;">
           <div class="section-title">6. Resultado da visita</div>
+          <div class="hint" style="margin:0;">Se registar uma encomenda, o resultado fica automaticamente como "Venda realizada".</div>
           <div class="status-picker" id="nvStatusPicker">
             ${Object.entries(STATUS_META).map(([key,m])=>`
-              <button type="button" class="status-opt ${m.cls} ${state.nv.status===key?'picked':''}" onclick="App.pickNvStatus('${key}', this)">${esc(m.label)}</button>
+              <button type="button" data-key="${key}" class="status-opt ${m.cls} ${state.nv.status===key?'picked':''}" onclick="App.pickNvStatus('${key}', this)">${esc(m.label)}</button>
             `).join('')}
           </div>
           <div class="field">
@@ -4381,7 +4382,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         </div>
         <div class="stack" style="gap:7px;">
           <div class="section-title" style="margin:0;">Encomenda</div>
-          <div id="mvEditEncomenda" class="stack" style="gap:7px;">
+          <div id="mvEditEncomenda" class="stack" style="gap:7px;" oninput="App.autoSaleStatus('mv')" onchange="App.autoSaleStatus('mv')">
             ${(v.orderItems||[]).map(oi=>orderRowHtml(oi)).join('')}
           </div>
           <button class="btn btn-ghost" style="align-self:flex-start;" onclick="App.addMvEditOrderRow()">${icon('plus')} Adicionar produto à encomenda</button>
@@ -5729,13 +5730,33 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const body = lines.join('\n');
     return `mailto:${ordersEmail()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   }
+  function mgrOrdersRange(){
+    const t = todayDateStr(); const a = state.mgrOrdersFrom || t, b = state.mgrOrdersTo || t;
+    return a<=b ? { from:a, to:b } : { from:b, to:a };
+  }
+  function mgrOrdersVisits(){
+    const { from, to } = mgrOrdersRange();
+    return state.data.visits.filter(v=>{
+      if(!(v.orderItems||[]).length) return false;
+      const d = localDateStr(v.timestamp); if(d<from || d>to) return false;
+      if(state.mgrOrdersVendor && v.vendorId!==state.mgrOrdersVendor) return false;
+      return true;
+    }).sort((a,b)=> a.timestamp<b.timestamp ? 1 : -1);
+  }
   function viewManagerOrders(){
-    const date = state.mgrOrdersDate || todayDateStr();
-    const { visits, totals, order } = dayOrdersSummary(date);
+    const { from, to } = mgrOrdersRange();
+    const list = mgrOrdersVisits();
+    const { totals, order } = ordersTotalsOf(list);
+    const nDel = list.filter(isDelivered).length;
+    const t = todayDateStr(), monthStart = t.slice(0,8) + '01';
+    const is = (a,b)=> from===a && to===b;
+    const vendors = state.data.vendors.slice().sort((a,b)=>a.name.localeCompare(b.name));
+    const label = from===to ? `do dia ${fmtDateOnly(from)}` : `de ${fmtDateOnly(from)} a ${fmtDateOnly(to)}`;
+    const filterNote = state.mgrOrdersVendor ? 'Vendedor: ' + (vendorById(state.mgrOrdersVendor)?.name || '') : '';
     return `
       <div class="stack">
-        <h2>Encomendas do dia</h2>
-        <p class="hint">Resumo das encomendas registadas pelos vendedores nas visitas do dia escolhido, prontas a enviar por email.</p>
+        <h2>Encomendas</h2>
+        <p class="hint">Encomendas registadas pelos vendedores nas visitas, no período escolhido, prontas a enviar por email.</p>
         <div class="card stack" style="gap:8px;">
           <div class="row-wrap" style="justify-content:space-between; align-items:center;">
             <div style="min-width:0; flex:1 1 200px;">
@@ -5748,7 +5769,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           ${state.mgrOrdersEmailEdit ? `
           <div class="field">
             <label for="mgrOrdersEmailInput">Novo email</label>
-            <input type="text" id="mgrOrdersEmailInput" inputmode="email" autocomplete="off" placeholder="ex: encomendas@empresa.co.mz" value="${esc(state.mgrOrdersEmailDraft)}" oninput="App.mgrOrdersEmailInput(this.value)" onkeydown="if(event.key==='Enter'){App.mgrSaveOrdersEmail()}" />
+            <input type="text" id="mgrOrdersEmailInput" inputmode="email" autocomplete="off" placeholder="ex: encomendas@empresa.co.mz" value="${esc(state.mgrOrdersEmailDraft)}" oninput="App.mgrOrdersEmailInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();App.mgrSaveOrdersEmail();}" />
             <div class="hint" style="margin-top:2px;">Pode indicar vários emails separados por vírgula ou ponto e vírgula.</div>
           </div>
           <div class="row-wrap" style="gap:8px;">
@@ -5756,11 +5777,26 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
             ${(state.data.ordersEmail||'').trim() ? `<button class="btn btn-ghost btn-sm" onclick="App.mgrResetOrdersEmail()">Repor o padrão</button>` : ''}
           </div>` : ''}
         </div>
-        <div class="field">
-          <label for="mgrOrdersDate">Dia</label>
-          <input type="date" id="mgrOrdersDate" value="${date}" onchange="App.mgrChangeOrdersDate(this.value)" />
+        <div class="card stack" style="gap:10px;">
+          <div class="row-wrap" style="gap:6px;">
+            <button class="btn ${is(t,t)?'btn-primary':'btn-secondary'} btn-sm" onclick="App.mgrOrdersRange('today')">Hoje</button>
+            <button class="btn ${is(dateAdd(t,-6),t)?'btn-primary':'btn-secondary'} btn-sm" onclick="App.mgrOrdersRange('7')">7 dias</button>
+            <button class="btn ${is(dateAdd(t,-29),t)?'btn-primary':'btn-secondary'} btn-sm" onclick="App.mgrOrdersRange('30')">30 dias</button>
+            <button class="btn ${is(monthStart,t)?'btn-primary':'btn-secondary'} btn-sm" onclick="App.mgrOrdersRange('month')">Este mês</button>
+          </div>
+          <div class="row-wrap" style="gap:10px;">
+            <div class="field" style="flex:1; min-width:130px;"><label for="mgrOrdersFrom">De</label><input type="date" id="mgrOrdersFrom" value="${from}" onchange="App.mgrOrdersSet('from', this.value)" /></div>
+            <div class="field" style="flex:1; min-width:130px;"><label for="mgrOrdersTo">Até</label><input type="date" id="mgrOrdersTo" value="${to}" onchange="App.mgrOrdersSet('to', this.value)" /></div>
+          </div>
+          <div class="field"><label for="mgrOrdersVendor">Vendedor</label>
+            <select id="mgrOrdersVendor" onchange="App.mgrOrdersSet('vendor', this.value)"><option value="">Todos os vendedores</option>${vendors.map(x=>`<option value="${esc(x.id)}" ${state.mgrOrdersVendor===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
         </div>
-        ${visits.length ? `
+        <div class="statgrid" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+          <div class="stat-tile"><div class="stat-num mono">${list.length}</div><div class="stat-label">Encomendas</div></div>
+          <div class="stat-tile"><div class="stat-num mono">${list.length - nDel}</div><div class="stat-label">Pendentes</div></div>
+          <div class="stat-tile"><div class="stat-num mono">${nDel}</div><div class="stat-label">Entregues</div></div>
+        </div>
+        ${list.length ? `
           <div class="card stack" style="gap:10px;">
             <div class="section-title">Total por produto</div>
             ${order.map(key=>{
@@ -5770,20 +5806,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           </div>
           <div class="stack" style="gap:8px;">
             <div class="section-title">Por visita</div>
-            ${visits.map(v=>`
+            ${list.map(v=>`
               <div class="visit-card">
                 <div class="visit-stripe status-neutral"></div>
                 <div class="visit-body">
-                  <div class="visit-head"><span class="visit-client">${esc(v.clientName)}${clientNumTag(clientById(v.clientId))}</span></div>
+                  <div class="visit-head"><span class="visit-client">${esc(v.clientName)}${clientNumTag(clientById(v.clientId))}</span>${deliveryChipHtml(v)}</div>
                   <div class="visit-meta">${fmtDateTime(v.timestamp)} · ${esc(vendorNameOf(v))}</div>
                   ${orderItemsLine(v)}
                 </div>
               </div>
             `).join('')}
           </div>
-          <a class="btn btn-primary btn-block" style="text-align:center; text-decoration:none;" href="${buildOrdersMailtoHref(date)}">${icon('mail')} Enviar encomendas do dia por email</a>
+          <a class="btn btn-primary btn-block" style="text-align:center; text-decoration:none;" href="${buildOrdersMailtoFor(list, label, filterNote)}">${icon('mail')} Enviar encomendas por email</a>
           <p class="hint">Abre o seu programa de email com a mensagem já preenchida para ${esc(ordersEmail().split(',').join(', '))}. Reveja e clique em enviar — a app não envia o email sozinha.</p>
-        ` : `<div class="empty-state">${icon('mail')}<p>Não há encomendas registadas neste dia.</p></div>`}
+        ` : `<div class="empty-state">${icon('mail')}<p>Não há encomendas registadas neste período.</p></div>`}
       </div>
     `;
   }
@@ -7312,7 +7348,25 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       }catch(e){ state.nv.gpsStatus='error'; state.nv.gpsErr = e.message; }
       if(el) el.innerHTML = renderNvGpsSection();
     },
+    // linhas de encomenda completas (produto + quantidade > 0) no contentor indicado
+    hasOrderIn(sel){
+      return Array.from(document.querySelectorAll(sel + ' .order-row')).some(r=>{
+        const n = r.querySelector('.nv-order-name'), q = r.querySelector('.nv-order-qty');
+        return n && q && n.value.trim() && parseFloat(q.value) > 0;
+      });
+    },
+    // uma encomenda implica "Venda realizada": marca-o sozinho (visita nova: 'nv'; edição do gestor: 'mv')
+    autoSaleStatus(kind){
+      const mv = kind==='mv';
+      if(!App.hasOrderIn(mv ? '#mvEditEncomenda' : '#nvEncomenda')) return;
+      if(mv){ state.mgrEditVisitStatus = 'venda'; } else { state.nv.status = 'venda'; }
+      document.querySelectorAll(mv ? '#mvEditStatusPicker .status-opt' : '#nvStatusPicker .status-opt').forEach(b=>{
+        const k = b.getAttribute('data-key') || (b.getAttribute('onclick')||'').match(/'(\w+)'/)?.[1];
+        b.classList.toggle('picked', k==='venda');
+      });
+    },
     pickNvStatus(key, btnEl){
+      if(key!=='venda' && App.hasOrderIn('#nvEncomenda')){ showToast('Há uma encomenda registada: o resultado é "Venda realizada". Remova a encomenda para escolher outro.'); return; }
       state.nv.status = key;
       if(btnEl && btnEl.parentElement){
         btnEl.parentElement.querySelectorAll('.status-opt').forEach(b=>b.classList.remove('picked'));
@@ -7368,6 +7422,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       renderView();
     },
     pickMvEditStatus(key, btnEl){
+      if(key!=='venda' && App.hasOrderIn('#mvEditEncomenda')){ showToast('Há uma encomenda registada: o resultado é "Venda realizada". Remova a encomenda para escolher outro.'); return; }
       state.mgrEditVisitStatus = key;
       if(btnEl && btnEl.parentElement){
         btnEl.parentElement.querySelectorAll('.status-opt').forEach(b=>b.classList.remove('picked'));
@@ -7393,7 +7448,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       if(!v) return;
       const dateVal = document.getElementById('mvEditDate')?.value || '';
       const timestamp = fromLocalInputValue(dateVal) || v.timestamp;
-      const status = state.mgrEditVisitStatus || v.status;
+      let status = state.mgrEditVisitStatus || v.status;
+      if(App.hasOrderIn('#mvEditEncomenda')) status = 'venda';
       const notes = document.getElementById('mvEditNotas')?.value.trim() || '';
       const pcRes = readProductChecks('#mvEditProdutos .product-row');
       if(pcRes.error){ showToast(pcRes.error.msg); pcRes.error.row.scrollIntoView({ block:'center', behavior:'smooth' }); return; }
@@ -7418,6 +7474,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     async submitVisit(){
       const client = state.nv.clientId ? clientById(state.nv.clientId) : null;
       if(!client){ showToast('Selecione um cliente.'); return; }
+      if(App.hasOrderIn('#nvEncomenda')) state.nv.status = 'venda';
       if(!state.nv.status){ showToast('Selecione o resultado da visita.'); return; }
       const notes = document.getElementById('nvNotas')?.value.trim() || '';
       const pcRes = readProductChecks('#nvProdutos .product-row');
@@ -7802,6 +7859,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     },
     mgrChangeOrdersDate(value){
       state.mgrOrdersDate = value || todayDateStr();
+      renderView();
+    },
+    mgrOrdersRange(k){
+      const t = todayDateStr();
+      if(k==='7'){ state.mgrOrdersFrom = dateAdd(t,-6); state.mgrOrdersTo = t; }
+      else if(k==='30'){ state.mgrOrdersFrom = dateAdd(t,-29); state.mgrOrdersTo = t; }
+      else if(k==='month'){ state.mgrOrdersFrom = t.slice(0,8) + '01'; state.mgrOrdersTo = t; }
+      else{ state.mgrOrdersFrom = t; state.mgrOrdersTo = t; }
+      renderView();
+    },
+    mgrOrdersSet(which, value){
+      if(which==='from'){ state.mgrOrdersFrom = value || null; if(state.mgrOrdersFrom && state.mgrOrdersTo && state.mgrOrdersFrom>state.mgrOrdersTo) state.mgrOrdersTo = state.mgrOrdersFrom; }
+      else if(which==='to'){ state.mgrOrdersTo = value || null; if(state.mgrOrdersFrom && state.mgrOrdersTo && state.mgrOrdersFrom>state.mgrOrdersTo) state.mgrOrdersFrom = state.mgrOrdersTo; }
+      else if(which==='vendor') state.mgrOrdersVendor = value || '';
       renderView();
     },
     mgrChangeReportVendor(value){
