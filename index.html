@@ -2569,7 +2569,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const period = state.supPeriod || 'all';
     const r = reportDateRange(period, state.supStart, state.supEnd);
     const rng = (r.start && r.end) ? (r.start===r.end ? fmtDateOnly(r.start) : `${fmtDateOnly(r.start)} a ${fmtDateOnly(r.end)}`) : r.start ? `desde ${fmtDateOnly(r.start)}` : r.end ? `até ${fmtDateOnly(r.end)}` : '';
-    const names = { all:'Todo o período', today:'Hoje', '7d':'Últimos 7 dias', '30d':'Últimos 30 dias', custom:'Dias específicos' };
+    const names = { all:'Todo o período', today:'Hoje', '7d':'Últimos 7 dias', '30d':'Últimos 30 dias', month:'Este mês', prevmonth:'Mês anterior', custom:'Período específico' };
     return (names[period]||'Período') + (rng ? ` (${rng})` : '');
   }
   function supplierShelfTableHtml(d){
@@ -2610,7 +2610,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
               <option value="today" ${period==='today'?'selected':''}>Hoje</option>
               <option value="7d" ${period==='7d'?'selected':''}>Últimos 7 dias</option>
               <option value="30d" ${period==='30d'?'selected':''}>Últimos 30 dias</option>
-              <option value="custom" ${period==='custom'?'selected':''}>Dias específicos…</option>
+              <option value="month" ${period==='month'?'selected':''}>Este mês</option>
+              <option value="prevmonth" ${period==='prevmonth'?'selected':''}>Mês anterior</option>
+              <option value="custom" ${period==='custom'?'selected':''}>Escolher período (de – até)…</option>
             </select>
           </div>
           ${period==='custom' ? `
@@ -5996,6 +5998,13 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   /* ----- Meta diária de visitas = nº de visitas agendadas por dia (coleção agendas) ----- */
   function reportDateRange(period, customStart, customEnd){
     if(period==='custom') return { start: customStart || null, end: customEnd || null };
+    if(period==='month' || period==='prevmonth'){
+      const t = todayDateStr(); const y = +t.slice(0,4), m = +t.slice(5,7);
+      if(period==='month') return { start: `${t.slice(0,7)}-01`, end: t };
+      const pm = m===1 ? 12 : m-1, py = m===1 ? y-1 : y, last = new Date(py, pm, 0).getDate();
+      const mm = String(pm).padStart(2,'0');
+      return { start: `${py}-${mm}-01`, end: `${py}-${mm}-${String(last).padStart(2,'0')}` };
+    }
     const cutoff = periodCutoff(period);
     if(cutoff==null) return { start:null, end:null };
     const back = Math.max(0, cutoff-1); // 7d = hoje + 6 dias anteriores (dias de calendário)
@@ -6157,7 +6166,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const r = reportDateRange(period, state.mgrReportCustomStart, state.mgrReportCustomEnd);
     const rng = (r.start && r.end) ? (r.start===r.end ? fmtDateOnly(r.start) : `${fmtDateOnly(r.start)} a ${fmtDateOnly(r.end)}`)
       : r.start ? `desde ${fmtDateOnly(r.start)}` : r.end ? `até ${fmtDateOnly(r.end)}` : '';
-    const names = { all:'Todo o período', today:'Hoje', '7d':'Últimos 7 dias', '30d':'Últimos 30 dias', custom:'Dias específicos' };
+    const names = { all:'Todo o período', today:'Hoje', '7d':'Últimos 7 dias', '30d':'Últimos 30 dias', month:'Este mês', prevmonth:'Mês anterior', custom:'Período específico' };
     const base = names[period] || 'Período';
     return rng ? `${base} (${rng})` : base;
   }
@@ -6650,7 +6659,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
               <option value="today" ${period==='today'?'selected':''}>Hoje</option>
               <option value="7d" ${period==='7d'?'selected':''}>Últimos 7 dias</option>
               <option value="30d" ${period==='30d'?'selected':''}>Últimos 30 dias</option>
-              <option value="custom" ${period==='custom'?'selected':''}>Dias específicos…</option>
+              <option value="month" ${period==='month'?'selected':''}>Este mês</option>
+              <option value="prevmonth" ${period==='prevmonth'?'selected':''}>Mês anterior</option>
+              <option value="custom" ${period==='custom'?'selected':''}>Escolher período (de – até)…</option>
             </select>
           </div>
           ${period==='custom' ? `
