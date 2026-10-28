@@ -876,7 +876,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     mgrReportCustomStart:null,
     mgrReportCustomEnd:null,
     reportAgendas:[], reportAgendasLoading:false,
-    histFrom:null, histTo:null, deliveryEditId:null,
+    histFrom:null, histTo:null, deliveryEditId:null, mgrDelVisitId:null,
     mgrReportVendor:'', mgrEditProductIdx:null, mgrProdImg:{ changed:false, data:null },
     pf:{ cat:'', search:'', busy:false },
     data:{ vendors:[], clients:[], visits:[], agendas:[], products:[], productImages:{}, managerAuth:null, suppliers:[], plans:[], orderUsers:[] },
@@ -1739,6 +1739,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
   // aviso (não bloqueia) quando as coordenadas ficam fora de Moçambique: costuma ser latitude e longitude trocadas
   function gpsOutsideMz(lat, lng){ return !(lat>=-27.5 && lat<=-9.5 && lng>=30 && lng<=41); }
+  async function removeVisit(id){
+    if(state.dbMode==='live'){ try{ await db.collection('visits').doc(id).delete(); }catch(e){} }
+    state.data.visits = state.data.visits.filter(x=>x.id!==id);
+    if(state.dbMode==='offline') saveOfflineStore();
+  }
   async function updateVisit(id, data){
     if(state.dbMode==='live'){
       try{ await db.collection('visits').doc(id).update(data); }catch(e){}
@@ -3845,10 +3850,74 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
   /* ----- Entrega da encomenda: v.delivery = { status:'entregue'|'pendente', deliveredAt:ISO|null } ----- */
   function isDelivered(v){ return !!(v.delivery && v.delivery.status==='entregue'); }
+  // Tempo de entrega = da encomenda registada (data/hora da visita) até à confirmação de entrega
+  function deliveryLeadMs(v){
+    if(!isDelivered(v) || !v.delivery.deliveredAt) return null;
+    const ms = new Date(v.delivery.deliveredAt).getTime() - new Date(v.timestamp).getTime();
+    return isFinite(ms) ? Math.max(0, ms) : null;
+  }
+  function fmtDur(ms){
+    if(ms==null || !isFinite(ms)) return '—';
+    const m = Math.round(ms/60000);
+    if(m < 1) return '< 1 min';
+    if(m < 60) return m + ' min';
+    const h = Math.floor(m/60), mm = m%60;
+    if(h < 24) return mm ? `${h} h ${mm} min` : `${h} h`;
+    const d = Math.floor(h/24), hh = h%24;
+    return hh ? `${d} d ${hh} h` : `${d} d`;
+  }
   function deliveryChipHtml(v){
     if(!(v.orderItems||[]).length) return '';
-    if(isDelivered(v)) return `<span class="chip status-good">Entregue${v.delivery.deliveredAt ? ' · ' + fmtDateTime(v.delivery.deliveredAt) : ''}</span>`;
-    return `<span class="chip status-warn">Entrega pendente</span>`;
+    if(isDelivered(v)){ const lead = deliveryLeadMs(v); return `<span class="chip status-good">Entregue${v.delivery.deliveredAt ? ' · ' + fmtDateTime(v.delivery.deliveredAt) : ''}${lead!=null ? ' · em ' + fmtDur(lead) : ''}</span>`; }
+    return `<span class="chip status-warn">Entrega pendente · há ${fmtDur(Date.now() - new Date(v.timestamp).getTime())}</span>`;
+  }
+  // estatísticas do tempo de entrega das encomendas (visitas com encomenda)
+  function deliveryStats(visits){
+    const orders = visits.filter(v=>(v.orderItems||[]).length);
+    const now = Date.now();
+    const rows = orders.map(v=>{
+      const lead = deliveryLeadMs(v), done = isDelivered(v);
+      return { v, vendor: vendorNameOf(v), vendorId: v.vendorId, client: v.clientName || '', placed: v.timestamp, deliveredAt: done ? (v.delivery.deliveredAt || null) : null, done, lead, age: done ? null : Math.max(0, now - new Date(v.timestamp).getTime()) };
+    }).sort((a,b)=> a.placed < b.placed ? 1 : -1);
+    const timed = rows.filter(r=>r.lead!=null).map(r=>r.lead).sort((a,b)=>a-b);
+    const avg = timed.length ? timed.reduce((a,b)=>a+b,0)/timed.length : null;
+    const median = timed.length ? (timed.length%2 ? timed[(timed.length-1)/2] : (timed[timed.length/2-1]+timed[timed.length/2])/2) : null;
+    const pending = rows.filter(r=>!r.done);
+    const oldest = pending.slice().sort((a,b)=>b.age-a.age)[0] || null;
+    const vm = {};
+    rows.forEach(r=>{
+      const o = vm[r.vendorId] = vm[r.vendorId] || { name:r.vendor, total:0, delivered:0, pending:0, leads:[] };
+      o.total++; if(r.done) o.delivered++; else o.pending++; if(r.lead!=null) o.leads.push(r.lead);
+    });
+    const byVendor = Object.values(vm).map(o=>({ name:o.name, total:o.total, delivered:o.delivered, pending:o.pending, timedN:o.leads.length, avg: o.leads.length ? o.leads.reduce((a,b)=>a+b,0)/o.leads.length : null }))
+      .sort((a,b)=> (a.avg==null) - (b.avg==null) || (a.avg||0) - (b.avg||0) || a.name.localeCompare(b.name));
+    return { rows, total: rows.length, delivered: rows.filter(r=>r.done).length, pending: pending.length, timedN: timed.length, avg, median, min: timed.length ? timed[0] : null, max: timed.length ? timed[timed.length-1] : null,
+      within24: timed.length ? timed.filter(x=>x<=86400000).length/timed.length : null, oldest, byVendor };
+  }
+  function reportDeliveryHtml(visits){
+    const st = deliveryStats(visits);
+    if(!st.total) return `<div class="card"><div class="section-title">Tempo de entrega das encomendas</div><p class="hint">Ainda sem encomendas neste período.</p></div>`;
+    const tile = (num, label, color)=>`<div class="stat-tile"><div class="stat-num mono"${color ? ` style="color:${color};"` : ''}>${num}</div><div class="stat-label">${label}</div></div>`;
+    const rows = st.byVendor.filter(x=>x.avg!=null).map(x=>({ name:x.name, count: x.avg/3600000, label: `${fmtDur(x.avg)} · ${x.timedN} entrega(s)`, tip: `${x.name}: tempo médio ${fmtDur(x.avg)} (${x.timedN} entrega(s) com data; ${x.pending} pendente(s))` }));
+    const pend = st.rows.filter(r=>!r.done).sort((a,b)=>b.age-a.age).slice(0,5);
+    return `
+      <div class="section-title" style="margin:6px 0 0;">Tempo de entrega das encomendas</div>
+      <p class="hint">Tempo desde que a encomenda foi registada (data e hora da visita) até à confirmação de entrega.</p>
+      <div class="statgrid">
+        ${tile(st.avg!=null ? fmtDur(st.avg) : '—', 'Tempo médio de entrega')}
+        ${tile(st.median!=null ? fmtDur(st.median) : '—', 'Mediana')}
+        ${tile(`${st.delivered}<span style="font-size:14px; color:var(--ink-muted);"> de ${st.total}</span>`, 'Encomendas entregues')}
+        ${tile(String(st.pending), 'Entregas pendentes', st.pending ? 'var(--status-warn-fg)' : '')}
+      </div>
+      <div class="card stack" style="gap:6px;">
+        <div class="visit-meta">Mais rápida: <b>${st.min!=null ? fmtDur(st.min) : '—'}</b> · Mais demorada: <b>${st.max!=null ? fmtDur(st.max) : '—'}</b>${st.within24!=null ? ` · Entregues em até 24 h: <b>${Math.round(st.within24*100)}%</b>` : ''}</div>
+        ${st.delivered > st.timedN ? `<div class="hint" style="margin:0;">${st.delivered - st.timedN} entrega(s) confirmada(s) sem data/hora não entram nas médias.</div>` : ''}
+      </div>
+      ${reportBarListHtml('Tempo médio de entrega por vendedor (horas)', rows, 'Ainda sem entregas confirmadas com data neste período.', { total: 1, insideAt: 80, note: 'Quanto menor, mais rápida a entrega.' })}
+      ${pend.length ? `<div class="card stack" style="gap:8px;"><div class="section-title">Entregas pendentes há mais tempo</div>
+        ${pend.map(r=>`<div class="row-wrap" style="justify-content:space-between; gap:8px;"><div style="min-width:0;"><div class="client-name">${esc(r.client)}</div><div class="visit-meta">${esc(r.vendor)} · encomenda de ${esc(fmtDateTime(r.placed))}</div></div><span class="chip status-warn">há ${esc(fmtDur(r.age))}</span></div>`).join('')}
+      </div>` : ''}
+    `;
   }
   function deliveryFieldsHtml(prefix, delivery){
     const delivered = !!(delivery && delivery.status==='entregue');
@@ -4274,8 +4343,19 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
             ${prodCount ? `<span class="chip status-neutral">${prodCount} produto(s) verificado(s)</span>` : ''}
             ${orderCount ? `<span class="chip status-neutral">${orderCount} produto(s) encomendado(s)</span>` : ''}
             ${v.gps ? `<a href="${mapLink(v.gps.lat,v.gps.lng)}" target="_blank" rel="noopener" style="font-size:12px;">${icon('map')} ver no mapa</a>` : ''}
-            ${allowEdit ? `<button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="App.toggleEditVisit('${v.id}')">${editing ? 'Cancelar' : 'Editar'}</button>` : ''}
+            ${allowEdit ? `<span class="row-wrap" style="margin-left:auto; gap:2px;">
+              <button class="btn btn-ghost btn-sm" onclick="App.toggleEditVisit('${v.id}')">${editing ? 'Cancelar' : 'Editar'}</button>
+              <button class="btn btn-ghost btn-sm" style="color:var(--status-bad-fg);" onclick="App.mgrAskDeleteVisit('${v.id}')">${state.mgrDelVisitId===v.id ? 'Cancelar' : 'Apagar'}</button>
+            </span>` : ''}
           </div>
+          ${allowEdit && state.mgrDelVisitId===v.id ? `
+            <div class="stack" style="gap:8px; border:1px solid var(--status-bad-fg); border-radius:var(--radius); padding:10px 12px; background:var(--status-bad-bg);">
+              <div style="color:var(--status-bad-fg); font-size:13px;">Apagar a visita a <b>${esc(v.clientName)}</b> de ${esc(fmtDateTime(v.timestamp))}?${orderCount ? ' A encomenda registada nesta visita também será apagada.' : ''} Esta ação não pode ser desfeita.</div>
+              <div class="row-wrap" style="gap:6px;">
+                <button class="btn btn-primary btn-sm" onclick="App.mgrDeleteVisit('${v.id}')">Sim, apagar visita</button>
+                <button class="btn btn-ghost btn-sm" onclick="App.mgrAskDeleteVisit('${v.id}')">Cancelar</button>
+              </div>
+            </div>` : ''}
         </div>
       </div>
     `;
@@ -6103,7 +6183,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       generated: new Date(), periodLabel: reportPeriodLabel(), vendorLabel: rv ? (vendorById(rv)?.name || 'Vendedor') : 'Todos os vendedores',
       visits, totalDone: visits.length, totalMeta, daysWithMeta, avgMeta: daysWithMeta ? totalMeta/daysWithMeta : 0,
       pct: totalMeta ? visits.length/totalMeta : null,
-      days, vendorsPresent, perDay, metaDays, metaVendors, byVendor, byChannel, byType, products, conv, convSc, convFilter, nd, ndFilter, agg, compFilter, records, single: !!rv
+      days, vendorsPresent, perDay, metaDays, metaVendors, byVendor, byChannel, byType, products, dl: deliveryStats(visits), conv, convSc, convFilter, nd, ndFilter, agg, compFilter, records, single: !!rv
     };
   }
   function reportFilename(ext){
@@ -6192,6 +6272,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       [{ v:'Meta média por dia (dias com agenda)', s:'bold' }, d.daysWithMeta ? { v:Math.round(d.avgMeta*10)/10, s:'money' } : '—'],
       [{ v:'Visitas com concorrência registada', s:'bold' }, I(d.agg.withData.length)],
       [{ v:'Visitas sem concorrentes no cliente', s:'bold' }, I(d.agg.none)],
+      [{ v:'Encomendas entregues / total', s:'bold' }, d.dl.delivered + ' de ' + d.dl.total],
+      [{ v:'Tempo médio de entrega', s:'bold' }, d.dl.avg!=null ? fmtDur(d.dl.avg) : '—'],
     ]});
     // visitas por dia x vendedor
     const vHead = ['Data','Total', ...d.vendorsPresent.map(v=>v.name)];
@@ -6226,6 +6308,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     sheets.push({ name:'Produtos encomendados', freeze:1, widths:[34,12,12], rows:[
       H(['Produto','Unidade','Quantidade']), ...d.products.map(p=>[p.product, p.unit, { v:p.qty, s:'int' }]),
     ]});
+    {
+      const dl = d.dl, hrs = ms => ms==null ? '' : { v: Math.round(ms/360000)/10, s:'money' };
+      sheets.push({ name:'Tempo de entrega', widths:[18,24,28,18,18,14,16], rows:[
+        [{ v:'Tempo desde que a encomenda foi registada (data/hora da visita) até à confirmação de entrega.', s:'note' }], [],
+        [{ v:'Encomendas', s:'bold' }, I(dl.total)], [{ v:'Entregues', s:'bold' }, I(dl.delivered)], [{ v:'Pendentes', s:'bold' }, I(dl.pending)],
+        [{ v:'Tempo médio', s:'bold' }, dl.avg!=null ? fmtDur(dl.avg) : '—'], [{ v:'Mediana', s:'bold' }, dl.median!=null ? fmtDur(dl.median) : '—'],
+        [{ v:'Mais rápida', s:'bold' }, dl.min!=null ? fmtDur(dl.min) : '—'], [{ v:'Mais demorada', s:'bold' }, dl.max!=null ? fmtDur(dl.max) : '—'],
+        [{ v:'Entregues em até 24 h', s:'bold' }, dl.within24!=null ? P(dl.within24) : '—'], [],
+        H(['Vendedor','Encomendas','Entregues','Pendentes','Tempo médio','Média (horas)']),
+        ...dl.byVendor.map(x=>[x.name, I(x.total), I(x.delivered), I(x.pending), x.avg!=null ? fmtDur(x.avg) : '—', hrs(x.avg)]), [],
+        H(['Encomenda registada em','Vendedor','Cliente','Entregue em','Tempo de entrega','Horas','Estado']),
+        ...dl.rows.map(r=>[fmtDateTime(r.placed), r.vendor, r.client, r.deliveredAt ? fmtDateTime(r.deliveredAt) : '', r.done ? (r.lead!=null ? fmtDur(r.lead) : 'sem data') : 'há ' + fmtDur(r.age), hrs(r.lead!=null ? r.lead : r.age), r.done ? 'Entregue' : 'Pendente']),
+      ]});
+    }
     sheets.push({ name:'Distribuição numérica', freeze:3, widths:[34,22,16,16,14], rows:[
       [{ v:'% dos clientes onde o produto foi verificado e estava em stock (última verificação de cada cliente). Filtro: ' + d.ndFilter, s:'note' }], [],
       H(['Produto','Categoria','Clientes em stock','Clientes verificados','Distribuição (%)']),
@@ -6385,6 +6481,18 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       table(['Produto','Unidade','Quantidade',''], [66,24,26,48], ['l','l','r','l'],
         d.products.map(p=>[p.product, p.unit, fmtReportCount(p.qty), { bar: p.qty/mx }]));
     }
+    section('Tempo de entrega das encomendas', 'Desde que a encomenda foi registada (data e hora da visita) até à confirmação de entrega.');
+    if(!d.dl.total) para('Ainda sem encomendas neste período.');
+    else{
+      const dl = d.dl;
+      para('Encomendas: ' + dl.total + ' | Entregues: ' + dl.delivered + ' | Pendentes: ' + dl.pending + ' | Tempo médio: ' + (dl.avg!=null ? fmtDur(dl.avg) : '-') + ' | Mediana: ' + (dl.median!=null ? fmtDur(dl.median) : '-') + ' | Mais rápida: ' + (dl.min!=null ? fmtDur(dl.min) : '-') + ' | Mais demorada: ' + (dl.max!=null ? fmtDur(dl.max) : '-') + (dl.within24!=null ? ' | Entregues em até 24 h: ' + Math.round(dl.within24*100) + '%' : ''));
+      if(!d.single) table(['Vendedor','Encomendas','Entregues','Pendentes','Tempo médio'], [58,24,24,24,34], ['l','r','r','r','r'],
+        dl.byVendor.map(x=>[x.name, String(x.total), String(x.delivered), String(x.pending), x.avg!=null ? fmtDur(x.avg) : '-']));
+      const shown = dl.rows.slice(0, 40);
+      if(dl.rows.length > shown.length) para('A mostrar as 40 encomendas mais recentes. O Excel inclui todas.');
+      table(['Encomenda','Vendedor','Cliente','Entregue em','Tempo'], [30,30,48,30,26], ['l','l','l','l','r'],
+        shown.map(r=>[fmtDateTime(r.placed), r.vendor, r.client, r.deliveredAt ? fmtDateTime(r.deliveredAt) : '-', r.done ? (r.lead!=null ? fmtDur(r.lead) : 'sem data') : 'pendente ' + fmtDur(r.age)]));
+    }
     section('Distribuição numérica por produto', d.ndFilter + ' | ' + d.nd.clients + ' cliente(s) com verificação de prateleira. % dos clientes onde o produto estava em stock (última verificação de cada cliente).');
     if(!d.nd.rows.length) para('Ainda sem verificações de prateleira neste período.');
     else{
@@ -6522,6 +6630,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         ${reportBarListHtml('Visitas por tipo de estabelecimento', typeRows, 'Ainda sem visitas neste período.', { share:true, unit:'visitas' })}
         ${reportConvHtml(visits)}
         ${reportBarListHtml('Produtos encomendados (vendas)', productRows, 'Ainda sem encomendas neste período.')}
+        ${reportDeliveryHtml(visits)}
         ${reportNdHtml(visits)}
         ${reportCompetitionHtml(visits)}
       </div>
@@ -7237,7 +7346,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       div.innerHTML = orderRowHtml().trim();
       container.appendChild(div.firstChild);
     },
+    mgrAskDeleteVisit(id){ state.mgrDelVisitId = state.mgrDelVisitId===id ? null : id; if(state.mgrDelVisitId) { state.mgrEditVisitId = null; state.mgrEditVisitStatus = null; } renderView(); },
+    async mgrDeleteVisit(id){
+      await removeVisit(id);
+      state.mgrDelVisitId = null; if(state.mgrEditVisitId===id){ state.mgrEditVisitId = null; state.mgrEditVisitStatus = null; }
+      showToast('Visita apagada.'); renderView();
+    },
     toggleEditVisit(id){
+      state.mgrDelVisitId = null;
       if(state.mgrEditVisitId === id){
         state.mgrEditVisitId = null; state.mgrEditVisitStatus = null;
       }else{
