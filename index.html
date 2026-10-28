@@ -1086,6 +1086,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     return chips.length ? `<div class="visit-footer" style="margin-top:5px;">${chips.join('')}</div>` : '';
   }
   function clientById(id){ return state.data.clients.find(c=>c.id===id); }
+  // Vendedor só vê os clientes da sua carteira (alocados a ele); gestor e restantes perfis veem todos.
+  function visibleClients(extraId){
+    const se = state.session;
+    if(se && se.role==='vendor') return state.data.clients.filter(c=>c.vendorId===se.vendorId || (extraId && c.id===extraId));
+    return state.data.clients;
+  }
   function vendorById(id){ return state.data.vendors.find(v=>v.id===id); }
   // Nome atual do vendedor (o cadastro manda; v.vendorName guardado na visita é só cópia antiga)
   function vendorNameOf(v){ const x = v && v.vendorId ? vendorById(v.vendorId) : null; return (x && x.name) || (v && v.vendorName) || 'Vendedor'; }
@@ -3437,7 +3443,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const weekCount = myVisits.filter(v=> daysSince(v.timestamp)<7).length;
     const myClientIds = new Set(myVisits.map(v=>v.clientId));
 
-    const stale = state.data.clients
+    const stale = visibleClients()
       .map(c=>({ c, s: clientStats(c.id) }))
       .filter(x=> x.s.last===null || daysSince(x.s.last) >= 14)
       .sort((a,b)=>{
@@ -3497,10 +3503,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
   function clientListHtml(filterText){
     const q = (filterText||'').trim().toLowerCase();
-    const list = state.data.clients
+    const mine = visibleClients();
+    const list = mine
       .filter(c => !q || [c.name, c.address, c.neighborhood, c.city, c.contactName, c.clientNumber].some(v => (v||'').toLowerCase().includes(q)))
       .sort((a,b)=>a.name.localeCompare(b.name));
-    if(!list.length) return `<div class="empty-state">${icon('clients')}<p>${state.data.clients.length ? 'Nenhum cliente encontrado.' : 'Ainda não há clientes registados.'}</p></div>`;
+    if(!list.length) return `<div class="empty-state">${icon('clients')}<p>${mine.length ? 'Nenhum cliente encontrado.' : 'Ainda não tem clientes atribuídos. O gestor define os clientes de cada vendedor.'}</p></div>`;
     return list.map(c=>{
       const s = clientStats(c.id);
       const contactLine = clientContactLine(c);
@@ -3695,7 +3702,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     `;
   }
   function viewNewVisit(){
-    const clients = [...state.data.clients].sort((a,b)=>a.name.localeCompare(b.name));
+    const clients = [...visibleClients(state.nv.clientId)].sort((a,b)=>a.name.localeCompare(b.name));
     return `
       <div class="stack">
         <h2>Nova visita</h2>
@@ -4462,11 +4469,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function agendaAddListHtml(filterText){
     const q = (filterText||'').trim().toLowerCase();
     const chosenSet = new Set(state.agenda.clientIds);
-    const list = state.data.clients
+    const mineAll = visibleClients();
+    const list = mineAll
       .filter(c=>!chosenSet.has(c.id))
       .filter(c => !q || [c.name, c.address, c.neighborhood, c.city].some(v=>(v||'').toLowerCase().includes(q)))
       .sort((a,b)=>a.name.localeCompare(b.name));
-    if(!list.length) return `<div class="hint">${state.data.clients.length ? 'Todos os clientes já estão no roteiro, ou nenhum corresponde à pesquisa.' : 'Ainda não há clientes registados.'}</div>`;
+    if(!list.length) return `<div class="hint">${mineAll.length ? 'Todos os clientes já estão no roteiro, ou nenhum corresponde à pesquisa.' : 'Ainda não há clientes registados.'}</div>`;
     return list.map(c=>`
       <div class="client-card">
         <div>
