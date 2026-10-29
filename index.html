@@ -885,7 +885,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     mgrReportCustomEnd:null,
     reportAgendas:[], reportAgendasLoading:false,
     histFrom:null, histTo:null, deliveryEditId:null, mgrDelVisitId:null,
-    mgrReportVendor:'', mgrEditProductIdx:null, mgrProdImg:{ changed:false, data:null },
+    mgrReportVendor:'', mgrReportCity:'', mgrReportHood:'', mgrEditProductIdx:null, mgrProdImg:{ changed:false, data:null },
     pf:{ cat:'', search:'', busy:false },
     data:{ vendors:[], clients:[], visits:[], agendas:[], products:[], productImages:{}, managerAuth:null, suppliers:[], plans:[], orderUsers:[] },
     mgrConvBy:'vendor', mgrConvExcl:false, mgrConvVendor:'', mgrConvCanal:'', mgrNdCanal:'', mgrNdTipo:'', mgrOrdersEmailEdit:false, mgrOrdersEmailDraft:'', mgrAgendaTab:'day', planVendorId:'', planMonth:'', planSource:'', routeImport:null, planPerDay:8, planSat:false, planOpenDay:null, planBusy:false, mcVendor:'',
@@ -4101,10 +4101,47 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const sub = st.n>1 ? `<small>${fmt(st.min)}–${fmt(st.max)}</small><small>${st.n} registos</small>` : `<small>1 registo</small>`;
     return `<div class="td-val">${fmtMT(st.avg)}${sub}</div>`;
   }
+  /* ----- Filtro por área geográfica (cidade / bairro do cliente) ----- */
+  function areaActive(){ return !!(state.mgrReportCity || state.mgrReportHood); }
+  function areaKeyOf(val){ const k = normKey(val); return k || '__none'; }
+  function clientInArea(c){
+    const city = state.mgrReportCity || '', hood = state.mgrReportHood || '';
+    if(!city && !hood) return true;
+    if(!c) return false;
+    if(city && areaKeyOf(c.city)!==city) return false;
+    if(hood && areaKeyOf(c.neighborhood)!==hood) return false;
+    return true;
+  }
+  function areaOptions(field, cityKey){
+    const m = new Map();
+    state.data.clients.forEach(c=>{
+      if(cityKey && areaKeyOf(c.city)!==cityKey) return;
+      const raw = String(c[field]||'').trim();
+      const k = areaKeyOf(raw);
+      if(!m.has(k)) m.set(k, { key:k, label: k==='__none' ? '' : raw, n:0 });
+      m.get(k).n++;
+    });
+    const arr = Array.from(m.values());
+    const named = arr.filter(o=>o.key!=='__none').sort((a,b)=>a.label.localeCompare(b.label));
+    return { named, none: m.get('__none') || null };
+  }
+  function areaLabel(){
+    const city = state.mgrReportCity || '', hood = state.mgrReportHood || '';
+    if(!city && !hood) return '';
+    const cName = city ? (city==='__none' ? 'Sem cidade' : (areaOptions('city').named.find(o=>o.key===city)?.label || city)) : '';
+    const hName = hood ? (hood==='__none' ? 'Sem bairro' : (areaOptions('neighborhood', city && city!=='__none' ? city : '').named.find(o=>o.key===hood)?.label || hood)) : '';
+    return [cName && 'Cidade: ' + cName, hName && 'Bairro: ' + hName].filter(Boolean).join(' | ');
+  }
+  function agendaAreaCount(a){
+    const ids = a.clientIds || [];
+    return areaActive() ? ids.filter(id=>clientInArea(clientById(id))).length : ids.length;
+  }
   function currentReportVisits(){
     const period = state.mgrReportPeriod || 'all';
     const rv = state.mgrReportVendor || '';
-    return reportFilterVisits(period, state.mgrReportCustomStart, state.mgrReportCustomEnd).filter(v=> !rv || v.vendorId===rv);
+    return reportFilterVisits(period, state.mgrReportCustomStart, state.mgrReportCustomEnd)
+      .filter(v=> !rv || v.vendorId===rv)
+      .filter(v=> !areaActive() || clientInArea(clientById(v.clientId)));
   }
   function compTipoOptions(canal){
     if(canal==='on' || canal==='off') return ESTABLISHMENT_TYPES[canal] || [];
@@ -6081,7 +6118,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const metaByDay = {}, metaByVendor = {}, doneByDay = {}, doneByVendor = {};
     let totalMeta = 0;
     agendas.forEach(a=>{
-      const n = (a.clientIds||[]).length;
+      const n = agendaAreaCount(a);
       if(!n) return;
       totalMeta += n;
       metaByDay[a.date] = (metaByDay[a.date]||0) + n;
@@ -6199,7 +6236,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     // meta
     const agendas = (state.reportAgendas || []).filter(a=> !rv || a.vendorId===rv);
     const metaByDay = {}, metaByVendor = {}; let totalMeta = 0;
-    agendas.forEach(a=>{ const n=(a.clientIds||[]).length; if(!n) return; totalMeta+=n; metaByDay[a.date]=(metaByDay[a.date]||0)+n; metaByVendor[a.vendorId]=(metaByVendor[a.vendorId]||0)+n; });
+    agendas.forEach(a=>{ const n=agendaAreaCount(a); if(!n) return; totalMeta+=n; metaByDay[a.date]=(metaByDay[a.date]||0)+n; metaByVendor[a.vendorId]=(metaByVendor[a.vendorId]||0)+n; });
     const doneByVendor = {}; visits.forEach(v=>{ doneByVendor[v.vendorId]=(doneByVendor[v.vendorId]||0)+1; });
     const daysWithMeta = Object.keys(metaByDay).length;
     const metaDays = Array.from(new Set([...Object.keys(metaByDay), ...Object.keys(perDay)])).sort()
@@ -6241,7 +6278,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       });
     });
     return {
-      generated: new Date(), periodLabel: reportPeriodLabel(), vendorLabel: rv ? (vendorById(rv)?.name || 'Vendedor') : 'Todos os vendedores',
+      generated: new Date(), periodLabel: reportPeriodLabel(), vendorLabel: rv ? (vendorById(rv)?.name || 'Vendedor') : 'Todos os vendedores', areaLabel: areaLabel(),
       visits, totalDone: visits.length, totalMeta, daysWithMeta, avgMeta: daysWithMeta ? totalMeta/daysWithMeta : 0,
       pct: totalMeta ? visits.length/totalMeta : null,
       days, vendorsPresent, perDay, metaDays, metaVendors, byVendor, byChannel, byType, products, dl: deliveryStats(visits), conv, convSc, convFilter, nd, ndFilter, agg, compFilter, records, single: !!rv
@@ -6249,7 +6286,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
   function reportFilename(ext){
     const rv = state.mgrReportVendor ? '-' + (vendorById(state.mgrReportVendor)?.name || 'vendedor').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') : '';
-    return `relatorio-visitas-${todayDateStr()}${rv}.${ext}`;
+    const ar = areaActive() ? '-' + (areaLabel().replace(/Cidade: |Bairro: /g,'').replace(/ \| /g,'-')).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') : '';
+    return `relatorio-visitas-${todayDateStr()}${rv}${ar}.${ext}`;
   }
 
   /* ----- Excel (.xlsx) mínimo: ZIP sem compressão + XML ----- */
@@ -6323,7 +6361,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       [{ v:APP_NAME_FULL, s:'note' }],
       [],
       [{ v:'Período', s:'bold' }, d.periodLabel],
-      [{ v:'Vendedor', s:'bold' }, d.vendorLabel],
+      [{ v:'Vendedor', s:'bold' }, d.vendorLabel], [{ v:'Área geográfica', s:'bold' }, d.areaLabel || 'Todas'],
       [{ v:'Gerado em', s:'bold' }, dt],
       [{ v:'Filtro da concorrência', s:'bold' }, d.compFilter],
       [],
@@ -6422,14 +6460,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     doc.setFont('helvetica','bold'); doc.setFontSize(19); doc.text('Relatório de Visitas', M+30, 17);
     doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.text(pdfTxt(APP_NAME_FULL), M+30, 24);
     doc.setFontSize(9); doc.setTextColor(210,212,235);
-    doc.text(pdfTxt(d.periodLabel + '  |  ' + d.vendorLabel), M+30, 30);
+    doc.text(pdfTxt(d.periodLabel + '  |  ' + d.vendorLabel + (d.areaLabel ? '  |  ' + d.areaLabel : '')), M+30, 30);
     doc.setFillColor(...ORANGE); doc.rect(0, 36, W, 1.6, 'F');
     let y = 46;
     const newPage = ()=>{
       doc.addPage();
       doc.setFillColor(...NAVY); doc.rect(0, 0, W, 10, 'F'); doc.setFillColor(...ORANGE); doc.rect(0, 10, W, 0.9, 'F');
       doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(9);
-      doc.text(pdfTxt('Relatório de Visitas  |  ' + d.periodLabel + '  |  ' + d.vendorLabel), M, 6.5);
+      doc.text(pdfTxt('Relatório de Visitas  |  ' + d.periodLabel + '  |  ' + d.vendorLabel + (d.areaLabel ? '  |  ' + d.areaLabel : '')), M, 6.5);
       y = 19;
     };
     const maxY = H - 16;
@@ -6590,9 +6628,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function viewManagerReport(){
     const period = state.mgrReportPeriod || 'all';
     const reportVendor = state.mgrReportVendor || '';
-    const visits = reportFilterVisits(period, state.mgrReportCustomStart, state.mgrReportCustomEnd)
-      .filter(v=> !reportVendor || v.vendorId===reportVendor);
+    const visits = currentReportVisits();
     const range = reportDateRange(period, state.mgrReportCustomStart, state.mgrReportCustomEnd);
+    const areaCities = areaOptions('city');
+    const areaHoods = areaOptions('neighborhood', state.mgrReportCity);
     let dEnd = range.end || todayDateStr();
     let dStart = range.start || (visits.length ? visits.map(v=>localDateStr(v.timestamp)).sort()[0] : dEnd);
     if(dStart > dEnd) dStart = dEnd;
@@ -6645,7 +6684,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         </div>
         ${state.mgrReportExportOpen ? `
         <div class="card stack" style="gap:10px;">
-          <div class="hint" style="margin:0;">Exporta o relatório com os filtros atuais (vendedor, período e, na concorrência, canal e tipo de estabelecimento).</div>
+          <div class="hint" style="margin:0;">Exporta o relatório com os filtros atuais (vendedor, período, cidade e bairro e, na concorrência, canal e tipo de estabelecimento).</div>
           <div class="row-wrap" style="gap:8px;">
             <button class="btn btn-primary btn-sm" ${state.mgrReportExporting?'disabled':''} onclick="App.exportReport('pdf')">${icon('download')} PDF</button>
             <button class="btn btn-primary btn-sm" ${state.mgrReportExporting?'disabled':''} onclick="App.exportReport('xlsx')">${icon('download')} Excel (.xlsx)</button>
@@ -6672,6 +6711,24 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
               <option value="custom" ${period==='custom'?'selected':''}>Escolher período (de – até)…</option>
             </select>
           </div>
+          <div class="row-wrap" style="gap:10px;">
+            <div class="field" style="flex:1; min-width:140px;">
+              <label for="mgrReportCidade">Cidade</label>
+              <select id="mgrReportCidade" onchange="App.mgrChangeReportArea('city', this.value)">
+                <option value="">Todas as cidades</option>
+                ${areaCities.named.map(o=>`<option value="${esc(o.key)}" ${state.mgrReportCity===o.key?'selected':''}>${esc(o.label)}</option>`).join('')}
+                ${areaCities.none ? `<option value="__none" ${state.mgrReportCity==='__none'?'selected':''}>Sem cidade definida</option>` : ''}
+              </select>
+            </div>
+            <div class="field" style="flex:1; min-width:140px;">
+              <label for="mgrReportBairro">Bairro</label>
+              <select id="mgrReportBairro" onchange="App.mgrChangeReportArea('hood', this.value)">
+                <option value="">Todos os bairros</option>
+                ${areaHoods.named.map(o=>`<option value="${esc(o.key)}" ${state.mgrReportHood===o.key?'selected':''}>${esc(o.label)}</option>`).join('')}
+                ${areaHoods.none ? `<option value="__none" ${state.mgrReportHood==='__none'?'selected':''}>Sem bairro definido</option>` : ''}
+              </select>
+            </div>
+          </div>
           ${period==='custom' ? `
           <div class="report-period-custom">
             <div class="field">
@@ -6685,7 +6742,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           </div>
           ` : ''}
         </div>
-        <p class="hint">${visits.length} visita(s) no período selecionado${reportVendor ? ' · ' + esc(vendorById(reportVendor)?.name || 'vendedor') : ''}.</p>
+        <p class="hint">${visits.length} visita(s) no período selecionado${reportVendor ? ' · ' + esc(vendorById(reportVendor)?.name || 'vendedor') : ''}${areaLabel() ? ' · ' + esc(areaLabel().replace(' | ',' · ')) : ''}.</p>
         ${reportMetaSectionHtml(visits, reportVendor)}
         ${columnChartHtml(reportVendor ? 'Visitas por dia' : 'Visitas por dia, por vendedor', dayRows, 'Ainda sem visitas neste período.', { note: dayNote, legend: reportVendor ? null : vendorLegendFor(dayRows) })}
         ${reportVendor ? '' : reportBarListHtml('Visitas por vendedor', vendorRows, 'Ainda sem visitas neste período.', { share:true, unit:'visitas' })}
@@ -7904,6 +7961,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     },
     mgrChangeReportVendor(value){
       state.mgrReportVendor = value || '';
+      renderView();
+    },
+    mgrChangeReportArea(which, value){
+      if(which==='city'){
+        state.mgrReportCity = value || '';
+        // o bairro escolhido só vale se existir na cidade escolhida
+        if(state.mgrReportHood && state.mgrReportHood!=='__none' && !areaOptions('neighborhood', state.mgrReportCity).named.some(o=>o.key===state.mgrReportHood)) state.mgrReportHood = '';
+      }else state.mgrReportHood = value || '';
       renderView();
     },
     mgrChangeReportPeriod(value){
