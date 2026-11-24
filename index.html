@@ -202,6 +202,7 @@
   .btn-primary{ background:var(--accent); color:var(--accent-contrast); }
   .btn-primary:hover{ filter:brightness(1.06); }
   .btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
+  [hidden]{ display:none !important; }
   .btn-secondary{ background:var(--surface); border-color:var(--border); color:var(--ink); }
   .btn-secondary:hover{ background:var(--surface-2); }
   .btn-ghost{ background:none; border:none; color:var(--accent-ink); padding:8px 4px; }
@@ -888,7 +889,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     mgrReportVendor:'', mgrReportCity:'', mgrReportHood:'', mgrEditProductIdx:null, mgrProdImg:{ changed:false, data:null },
     pf:{ cat:'', search:'', busy:false },
     data:{ vendors:[], clients:[], visits:[], agendas:[], products:[], productImages:{}, managerAuth:null, suppliers:[], plans:[], orderUsers:[] },
-    mgrConvBy:'vendor', mgrConvExcl:false, mgrConvVendor:'', mgrConvCanal:'', mgrNdCanal:'', mgrNdTipo:'', mgrOrdersEmailEdit:false, mgrOrdersEmailDraft:'', mgrAgendaTab:'day', planVendorId:'', planMonth:'', planSource:'', routeImport:null, planPerDay:8, planSat:false, planOpenDay:null, planBusy:false, mcVendor:'',
+    mgrConvBy:'vendor', mgrConvExcl:false, mgrConvVendor:'', mgrConvCanal:'', mgrNdCanal:'', mgrNdTipo:'', mgrOrdersEmailEdit:false, mgrOrdersEmailDraft:'', mgrAgendaTab:'day', planVendorId:'', planMonth:'', planSource:'', routeImport:null, planPerDay:12, planSat:false, planOpenDay:null, planBusy:false, mcVendor:'',
     ordersUsersLoaded:false, loginPendingOrders:null, ordLoginError:null, mgrOrdResetId:null, mgrOrdDelId:null,
     ordFrom:null, ordTo:null, ordVendor:'', ordDeliv:'', ordEditId:null,
     suppliersLoaded:false, supPeriod:'all', supStart:null, supEnd:null, supCanal:'', supTipo:'', supExporting:false,
@@ -1135,7 +1136,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
 
   /* ============ DATA LAYER (db capability with offline fallback) ============ */
-  const DEFAULT_CATEGORIES = ['Água','Espirituosas','Vinhos','Bebidas não-alcoólicas','Alimentos','Outros'];
+  const DEFAULT_CATEGORIES = ['Água','Espirituosas','Vinhos','Bebidas não-alcoólicas','Alimentos','Papel','Outros'];
   const FALLBACK_CATEGORY = 'Outros'; // categoria padrão: não pode ser removida nem renomeada
   // Lista de categorias gerida pelo gestor (settings/categories); sem lista guardada, usa as padrão
   function productCategories(){ return (state.data && Array.isArray(state.data.categories) && state.data.categories.length) ? state.data.categories : DEFAULT_CATEGORIES; }
@@ -1312,10 +1313,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function subscribeAll(){
     db.collection('vendors').orderBy('name').onSnapshot(snap=>{
       state.data.vendors = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      state.vendorsLoaded = true;
       render();
     }, ()=>{});
     db.collection('plans').onSnapshot(snap=>{
       state.data.plans = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      state.plansLoaded = true;
       render();
     }, ()=>{});
     db.collection('suppliers').onSnapshot(snap=>{
@@ -1330,10 +1333,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     }, ()=>{ state.ordersUsersLoaded = true; });
     db.collection('clients').orderBy('name').onSnapshot(snap=>{
       state.data.clients = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      state.clientsLoaded = true;
       render();
     }, ()=>{});
     db.collection('visits').orderBy('timestamp','desc').limit(500).onSnapshot(snap=>{
       state.data.visits = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      state.visitsLoaded = true;
       render();
     }, ()=>{});
     db.collection('productImages').limit(500).onSnapshot(snap=>{
@@ -1892,12 +1897,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     if(start > last) return [];
     return dateSpan(start, last).filter(d=>{ const wd = new Date(d+'T12:00:00').getDay(); return (wd>=1 && wd<=5) || (sat && wd===6); });
   }
-  // Limite de visitas por dia nas propostas: às segundas-feiras no máximo MONDAY_MAX (o dia é mais curto: reuniões, preparação da semana)
-  const MONDAY_MAX = 6;
-  function dayCap(date, perDay){
-    const wd = new Date(date+'T12:00:00').getDay();
-    return wd===1 ? Math.min(perDay, MONDAY_MAX) : perDay;
-  }
+  // Meta de visitas por dia nas propostas: 12 (mínimo e média). Todos os dias úteis têm o mesmo limite.
+  const PLAN_TARGET_PER_DAY = 12;
+  function dayCap(date, perDay){ return perDay; }
   // Semana de trabalho = de segunda a domingo (chave = data da segunda-feira). Um cliente nunca é visitado duas vezes na mesma semana.
   function weekOf(date){
     const wd = new Date(date+'T12:00:00').getDay();
@@ -1991,11 +1993,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       const minGap = Math.floor(o.interval*0.5);
       const mine = assigned[o.c.id] = assigned[o.c.id] || [];
       let best = null;
-      let strict = true;
+      let strict = true, extra = 0;
       const consider = (from, to)=>{
         for(let i=from; i<=to && i<days.length; i++){
           const d = days[i], list = out.days[d];
-          if(list.length >= (strict ? quota[d] : dayCap(d, perDay))) continue;
+          if(list.length >= (strict ? quota[d] : dayCap(d, perDay) + extra)) continue;
           if(mine.some(x=>Math.abs((new Date(x+'T12:00:00')-new Date(d+'T12:00:00'))/86400000) < minGap || weekOf(x)===weekOf(d))) continue;
           const km = minKmToDay(o.c, list);
           const score = (i-start) + (list.length ? (km==null ? 1 : Math.min(km,30)*0.25) : 1);
@@ -2005,11 +2007,115 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       consider(start, start+slack);
       if(!best) consider(start+slack+1, days.length-1);
       if(!best){ strict = false; consider(start, days.length-1); }
+      if(!best){ extra = 3; consider(start, days.length-1); }   // carteira grande: aceita até +3 visitas num dia em vez de deixar o cliente sem visita
       if(!best){ out.unscheduled.push(o.c.id); return; }
       out.days[best.d].push(o.c.id); mine.push(best.d);
     });
     Object.keys(out.days).forEach(d=>{ out.days[d] = orderDayIds(out.days[d]); });
     return out;
+  }
+
+  // Plano automático: equilibra cada semana (re-aloca clientes para os dias vagos) e completa cada dia até à meta
+  // com clientes bi-mensais e mensais (depois trimestrais/sem frequência e, só se faltar mesmo, semanais).
+  // Um cliente nunca repete na mesma semana. Devolve as datas que receberam reforço.
+  function topUpPlan(days, vendorId, perDay){
+    const dates = Object.keys(days).sort();
+    const reinforced = [];
+    const weeks = {};
+    dates.forEach(d=>{ (weeks[weekOf(d)] = weeks[weekOf(d)] || []).push(d); });
+    // 1) re-alocar dentro da semana: dos dias mais cheios para os mais vazios (diferença máxima de 1)
+    Object.values(weeks).forEach(ds=>{
+      for(let guard=0; guard<600; guard++){
+        const sorted = ds.slice().sort((a,b)=>days[a].length-days[b].length);
+        const lo = sorted[0], hi = sorted[sorted.length-1];
+        if(days[hi].length - days[lo].length <= 1 || days[lo].length >= dayCap(lo, perDay)) break;
+        // escolhe o cliente do dia cheio mais perto (GPS) dos clientes do dia vazio
+        const cur = days[lo];
+        let pick = days[hi][days[hi].length-1], bestKm = Infinity;
+        days[hi].forEach(id=>{ const c = clientById(id); const km = c ? minKmToDay(c, cur) : null; const k = km==null ? 50 : km; if(k < bestKm){ bestKm = k; pick = id; } });
+        days[hi] = days[hi].filter(x=>x!==pick); days[lo] = cur.concat([pick]);
+        if(!reinforced.includes(lo)) reinforced.push(lo);
+      }
+    });
+    // 2) completar até à meta com reforço
+    const pool = portfolioOf(vendorId);
+    if(pool.length){
+      const cnt = {};
+      dates.forEach(d=>(days[d]||[]).forEach(id=>{ cnt[id] = (cnt[id]||0)+1; }));
+      const klass = c => { const f = c.visitFrequency; return (f==='bimensal'||f==='mensal') ? 0 : (f==='semanal' ? 2 : 1); };
+      const need = dates.filter(d=>(days[d]||[]).length < dayCap(d, perDay)).sort((a,b)=>days[a].length-days[b].length || (a<b?-1:1));
+      // vários passos: um cliente de cada vez por dia, para repartir o reforço por todos os dias da semana
+      for(let pass=0; pass<perDay; pass++){
+        let changed = false;
+        need.slice().sort((a,b)=>days[a].length-days[b].length || (a<b?-1:1)).forEach(d=>{
+          if(days[d].length >= dayCap(d, perDay)) return;
+          const wk = weekOf(d);
+          const inWeek = new Set();
+          (weeks[wk]||[]).forEach(x=>(days[x]||[]).forEach(id=>inWeek.add(id)));
+          const cands = pool.filter(c=>!inWeek.has(c.id)).map(c=>{
+            const km = minKmToDay(c, days[d]);
+            const lp = [lastVisitDateOf(c.id), ...dates.filter(x=>x<d && (days[x]||[]).includes(c.id))].sort().pop() || '';
+            return { c, k:klass(c), n:cnt[c.id]||0, b: km==null ? 6 : Math.min(5, Math.floor(km/6)), last: lp };
+          }).sort((a,b)=> a.k-b.k || a.n-b.n || a.b-b.b || (a.last<b.last ? -1 : a.last>b.last ? 1 : 0) || a.c.name.localeCompare(b.c.name));
+          if(!cands.length) return;
+          const c = cands[0].c;
+          days[d] = days[d].concat([c.id]); cnt[c.id] = (cnt[c.id]||0)+1; changed = true;
+          if(!reinforced.includes(d)) reinforced.push(d);
+        });
+        if(!changed) break;
+      }
+    }
+    Object.keys(days).forEach(d=>{ days[d] = orderDayIds(days[d]); });
+    return reinforced;
+  }
+  // visitas que faltam para chegar à meta (dias úteis do plano)
+  function planShortfall(plan){
+    const per = plan.perDay || PLAN_TARGET_PER_DAY;
+    return Object.keys(plan.days||{}).reduce((a,d)=>a + Math.max(0, per - (plan.days[d]||[]).length), 0);
+  }
+  function nextMonthStr(m){ const [y,mm] = m.split('-').map(Number); return mm===12 ? (y+1)+'-01' : y+'-'+String(mm+1).padStart(2,'0'); }
+  // gera e guarda a proposta (rascunho) de um vendedor para um mês; o gestor revê e confirma
+  async function buildAndSavePlan(vid, month, o){
+    const useRoute = !!o.useRoute;
+    const res = useRoute ? generatePlanFromRoute(vid, month, o.sat) : generatePlanDays(vid, month, o.perDay, o.sat);
+    if(!Object.keys(res.days).length) return null;
+    res.dedup = dedupeWeeks(res.days);
+    res.filled = useRoute ? fillEmptyDays(res.days, vid, o.perDay, true) : topUpPlan(res.days, vid, o.perDay);
+    const old = planOf(vid, month);
+    const longest = Math.max(0, ...Object.values(res.days).map(l=>l.length));
+    const extra = useRoute ? { source:'route', routeFile:(state.data.routes && state.data.routes.fileName) || '', routeMissing: res.missing } : { source:'auto' };
+    if(o.auto) extra.auto = true;
+    const saved = await savePlan({ id: planId(vid, month), vendorId: vid, month, status:'draft', days: res.days, unscheduled: res.unscheduled, carried: [], perDay: useRoute ? Math.max(o.perDay, longest) : o.perDay, sat: !!o.sat, portfolio: portfolioOf(vid).map(c=>c.id),
+      generatedAt: nowIso(), confirmedAt: null, prevConfirmedAt: old ? (old.confirmedAt || old.prevConfirmedAt || null) : null, filled: res.filled, dedup: res.dedup||0, ...extra });
+    return { saved, res };
+  }
+  // No início de cada mês (primeiro acesso do gestor; a partir do dia 26 já prepara o mês seguinte) gera a proposta de todos os vendedores com carteira
+  function maybeAutoPlans(){
+    if(state.autoPlanBusy || !state.session || state.session.role!=='manager' || !state.ready) return;
+    if(state.dbMode==='live' && !(state.plansLoaded && state.clientsLoaded && state.visitsLoaded && state.vendorsLoaded)) return;
+    state.autoPlanTried = state.autoPlanTried || {};
+    const today = todayDateStr(), cur = monthNow();
+    const months = [cur]; if(+today.slice(8,10) >= 26) months.push(nextMonthStr(cur));
+    const todo = [];
+    months.forEach(m=>(state.data.vendors||[]).forEach(v=>{
+      const key = v.id + '_' + m;
+      if(!planOf(v.id, m) && !state.autoPlanTried[key] && portfolioOf(v.id).length) todo.push([v.id, m, key]);
+    }));
+    if(!todo.length) return;
+    state.autoPlanBusy = true;
+    (async ()=>{
+      let n = 0;
+      try{
+        for(const [vid, m, key] of todo){
+          state.autoPlanTried[key] = 1;
+          if(planOf(vid, m)) continue;
+          const r = await buildAndSavePlan(vid, m, { perDay: PLAN_TARGET_PER_DAY, sat: false, auto: true });
+          if(r) n++;
+        }
+      }catch(e){}
+      state.autoPlanBusy = false;
+      if(n){ showToast(`Agenda do mês gerada automaticamente para ${n} vendedor(es). Reveja e confirme em Agenda.`); renderView(); }
+    })();
   }
   /* ----- Rota fixa do Excel (folha "Calendario": Vendedor, Semana 1-4, Dia, Ordem, Cliente, Periodicidade) ----- */
   const ROUTE_DOW = { segunda:1, terca:2, quarta:3, quinta:4, sexta:5, sabado:6 };
@@ -2334,9 +2440,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           </div>
           <div class="row-wrap" style="gap:10px; align-items:flex-end;">
             <div class="field" style="flex:1; min-width:140px;">
-              <label for="planPerDay">Visitas por dia (máx.)</label>
+              <label for="planPerDay">Visitas por dia (meta)</label>
               <input type="number" id="planPerDay" min="1" max="40" value="${state.planPerDay}" oninput="App.planSet('perDay', this.value)" />
-              <small class="hint" style="margin:2px 0 0;">Às segundas-feiras, no máximo ${MONDAY_MAX}.</small>
+              <small class="hint" style="margin:2px 0 0;">Meta de ${PLAN_TARGET_PER_DAY} por dia: se faltar, completa com clientes bi-mensais e mensais.</small>
             </div>
             <label class="check-row" style="flex:1; min-width:140px;"><input type="checkbox" id="planSat" ${state.planSat?'checked':''} onchange="App.planSet('sat', this.checked)" /> Incluir sábados</label>
           </div>
@@ -2364,9 +2470,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
             <div class="section-title" style="margin:0;">Plano de ${esc(monthLabel(plan.month))}</div>
             ${statusChip}
           </div>
-          <div class="hint" style="margin:0;">${plan.source==='route' ? `Origem: <b>rota do Excel</b>${plan.routeFile ? ' (' + esc(plan.routeFile) + ')' : ''}. ` : ''}${dates.reduce((a,d)=>a+(plan.days[d]||[]).length,0)} visita(s) em ${dates.length} dia(s) úteis${plan.source==='route' ? '' : `, até ${plan.perDay} por dia (segundas: até ${Math.min(plan.perDay, MONDAY_MAX)})`}${plan.sat?', com sábados':''}.${prog && prog.planned ? ` Cumprido até hoje: ${prog.done} de ${prog.planned} (${Math.round(prog.done/prog.planned*100)}%).` : ''}</div>
+          <div class="hint" style="margin:0;">${plan.source==='route' ? `Origem: <b>rota do Excel</b>${plan.routeFile ? ' (' + esc(plan.routeFile) + ')' : ''}. ` : ''}${dates.reduce((a,d)=>a+(plan.days[d]||[]).length,0)} visita(s) em ${dates.length} dia(s) úteis${plan.source==='route' ? '' : `, meta de ${plan.perDay} por dia`}${plan.sat?', com sábados':''}.${prog && prog.planned ? ` Cumprido até hoje: ${prog.done} de ${prog.planned} (${Math.round(prog.done/prog.planned*100)}%).` : ''}</div>
+          ${plan.auto && plan.status!=='confirmed' ? `<div class="hint" style="margin:0;">Proposta gerada automaticamente em ${esc(fmtDateOnly(localDateStr(plan.generatedAt)))} (início do mês), com base na frequência, no GPS e na meta de ${plan.perDay} visitas por dia. O gestor valida antes de chegar ao vendedor.</div>` : ''}
+          ${plan.source!=='route' && planShortfall(plan)>0 ? `<div class="hint" style="margin:0; color:var(--status-warn-fg);">Faltam ${planShortfall(plan)} visita(s) para chegar às ${plan.perDay} por dia: a carteira (${portAll.length} cliente(s)) é pequena para o mês. Atribua mais clientes a este vendedor ou acrescente à mão.</div>` : ''}
           ${plan.dedup ? `<div class="hint" style="margin:0;">${plan.dedup} repetição(ões) retirada(s): cada cliente é visitado no máximo uma vez por semana.</div>` : ''}
-          ${(plan.filled||[]).length ? `<div class="hint" style="margin:0;">${plan.filled.length} dia(s) sem visitas na origem foram reforçados com clientes da carteira (marcados "reforço"), para o vendedor ter visitas todos os dias úteis do mês.</div>` : ''}
+          ${(plan.filled||[]).length ? `<div class="hint" style="margin:0;">${plan.filled.length} dia(s) foram reforçados/re-alocados com clientes bi-mensais e mensais (marcados "reforço") para completar a meta diária.</div>` : ''}
           ${dates.filter(d=>!(plan.days[d]||[]).length).length ? `<div class="hint" style="color:var(--status-warn-fg);">Sem visitas em: ${esc(dates.filter(d=>!(plan.days[d]||[]).length).slice(0,8).map(dayLabelPlan).join(', '))}. Acrescente clientes à carteira ou aos dias.</div>` : ''}
           ${(plan.routeMissing||[]).length ? `<div class="hint" style="color:var(--status-warn-fg);">${plan.routeMissing.length} cliente(s) da rota não existem na app e ficaram de fora: ${esc(plan.routeMissing.slice(0,8).join(', '))}${plan.routeMissing.length>8?'…':''}. Importe-os em Clientes e gere a proposta de novo.</div>` : ''}
           ${(plan.unscheduled||[]).length ? `<div class="hint" style="color:var(--status-warn-fg);">${plan.unscheduled.length} visita(s) não couberam no mês com ${plan.perDay} por dia: ${esc(plan.unscheduled.map(cName).slice(0,6).join(', '))}${plan.unscheduled.length>6?'…':''}. Aumente as visitas por dia ou gere de novo.</div>` : ''}
@@ -2524,7 +2632,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const periodVisits = reportFilterVisits(period, state.supStart, state.supEnd).filter(v=>visitMatchCT(v, canal, tipo));
     const mine = periodVisits.filter(v=> (v.productChecks||[]).some(x=>names.has(x.product)) || (v.orderItems||[]).some(x=>names.has(x.product)));
     const clients = new Set(mine.map(v=>v.clientId));
-    const qty = {}, qtyOrder = [], totals = { caixas:0, unidades:0 };
+    const qty = {}, qtyOrder = [], totals = { caixas:0, unidades:0, volume:0, embalagem:0 };
     const byClient = {}, byVendor = {};
     let orderVisits = 0;
     mine.forEach(v=>{
@@ -2537,24 +2645,26 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       const vn = vendorNameOf(v);
       (byVendor[vn] = byVendor[vn] || { name:vn, count:0 }).count++;
       items.forEach(o=>{
-        const q = parseFloat(o.quantity) || 0, unit = o.unit==='unidades' ? 'unidades' : 'caixas', key = o.product + '|' + unit;
+        const q = parseFloat(o.quantity) || 0, unit = normOrderUnit(o.unit), key = o.product + '|' + unit;
         if(!(key in qty)){ qty[key] = 0; qtyOrder.push(key); }
         qty[key] += q; totals[unit] += q;
       });
     });
     const orders = qtyOrder.map(k=>{ const [product,unit] = k.split('|'); return { product, unit, qty:qty[k] }; }).sort((a,b)=>b.qty-a.qty);
     const shelf = prods.map(p=>{
-      let n = 0, avail = 0; const pu = [], pb = [], po = [];
+      let n = 0, avail = 0; const pu = [], pb = [], po = [], pv = [], pe = [];
       mine.forEach(v=>(v.productChecks||[]).forEach(x=>{
         if(x.product!==p.name) return;
         n++; if(x.available) avail++;
         if(!x.available) return;
-        const u = parsePriceNum(x.priceUnit), b = parsePriceNum(x.priceBox);
+        const u = parsePriceNum(x.priceUnit), b = parsePriceNum(x.priceBox), vo = parsePriceNum(x.priceVolume), em = parsePriceNum(x.priceEmb);
         if(u!=null) pu.push(u);
         if(b!=null) pb.push(b);
-        if(u==null && b==null){ const o = parsePriceNum(x.price); if(o!=null) po.push(o); }   // preço antigo, sem unidade/caixa
+        if(vo!=null) pv.push(vo);
+        if(em!=null) pe.push(em);
+        if(u==null && b==null && vo==null && em==null){ const o = parsePriceNum(x.price); if(o!=null) po.push(o); }   // preço antigo, sem unidade/caixa
       }));
-      return { name:p.name, category: productCategories().includes(p.category) ? p.category : FALLBACK_CATEGORY, active:p.active!==false, n, avail, pricesUnit:pu, pricesBox:pb, pricesOther:po };
+      return { name:p.name, category: productCategories().includes(p.category) ? p.category : FALLBACK_CATEGORY, active:p.active!==false, n, avail, pricesUnit:pu, pricesBox:pb, pricesOther:po, pricesVol:pv, pricesEmb:pe };
     });
     const shelfN = shelf.reduce((a,x)=>a+x.n,0), shelfAvail = shelf.reduce((a,x)=>a+x.avail,0);
     const cnt = (keyFn)=>{ const m = {}; mine.forEach(v=>{ const k = keyFn(v); m[k] = (m[k]||0)+1; }); return m; };
@@ -2586,7 +2696,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         <p class="hint" style="margin-bottom:4px;">Presença = verificações em que o produto estava disponível. O preço médio da unidade e da caixa conta só as verificações com o produto disponível e o preço indicado; unidade e caixa nunca se misturam.</p>
         <div class="comp-tbl">
           <div class="th">Produto</div><div class="th">Preço unidade</div><div class="th">Preço caixa</div>
-          ${d.shelf.map(x=>`<div class="td-prod">${esc(x.name)}<small>${esc(x.category)}${x.active?'':' · inativo'}</small><small>${x.n ? `Presença ${Math.round(x.avail/x.n*100)}% · ${x.avail}/${x.n} verificações` : 'Sem verificações'}</small>${x.pricesOther.length ? `<small>+ ${x.pricesOther.length} registo(s) sem indicar un./cx. (média ${fmtMT(priceStat(x.pricesOther).avg)})</small>` : ''}</div>${priceCellHtml(x.pricesUnit)}${priceCellHtml(x.pricesBox)}`).join('')}
+          ${d.shelf.map(x=>`<div class="td-prod">${esc(x.name)}<small>${esc(x.category)}${x.active?'':' · inativo'}</small><small>${x.n ? `Presença ${Math.round(x.avail/x.n*100)}% · ${x.avail}/${x.n} verificações` : 'Sem verificações'}</small>${(x.pricesVol.length||x.pricesEmb.length) ? `<small>${[x.pricesVol.length ? 'Volume médio ' + fmtMT(priceStat(x.pricesVol).avg) : '', x.pricesEmb.length ? 'Embalagem média ' + fmtMT(priceStat(x.pricesEmb).avg) : ''].filter(Boolean).join(' · ')}</small>` : ''}${x.pricesOther.length ? `<small>+ ${x.pricesOther.length} registo(s) sem indicar un./cx. (média ${fmtMT(priceStat(x.pricesOther).avg)})</small>` : ''}</div>${priceCellHtml(x.pricesUnit)}${priceCellHtml(x.pricesBox)}`).join('')}
         </div>
       </div>`;
   }
@@ -2650,6 +2760,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
           <div class="stat-tile"><div class="stat-num mono">${d.clients}</div><div class="stat-label">Clientes</div></div>
           <div class="stat-tile"><div class="stat-num mono">${fmtReportCount(d.totals.caixas)}</div><div class="stat-label">Caixas encomendadas</div></div>
           <div class="stat-tile"><div class="stat-num mono">${fmtReportCount(d.totals.unidades)}</div><div class="stat-label">Unidades encomendadas</div></div>
+          ${d.totals.volume ? `<div class="stat-tile"><div class="stat-num mono">${fmtReportCount(d.totals.volume)}</div><div class="stat-label">Volumes encomendados</div></div>` : ''}
+          ${d.totals.embalagem ? `<div class="stat-tile"><div class="stat-num mono">${fmtReportCount(d.totals.embalagem)}</div><div class="stat-label">Embalagens encomendadas</div></div>` : ''}
           <div class="stat-tile"><div class="stat-num mono">${d.orderVisits}</div><div class="stat-label">Encomendas (visitas)</div></div>
           <div class="stat-tile"><div class="stat-num mono">${d.shelfN ? Math.round(d.shelfAvail/d.shelfN*100) + '%' : '—'}</div><div class="stat-label">Presença na prateleira</div></div>
         </div>
@@ -2677,14 +2789,15 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       [{ v:'Fornecedor', s:'bold' }, d.sup.name], [{ v:'Período', s:'bold' }, d.periodLabel], [{ v:'Filtros', s:'bold' }, filt], [{ v:'Gerado em', s:'bold' }, dt], [],
       [{ v:'Visitas com os seus produtos', s:'bold' }, I(d.visits)], [{ v:'Clientes', s:'bold' }, I(d.clients)],
       [{ v:'Caixas encomendadas', s:'bold' }, I(d.totals.caixas)], [{ v:'Unidades encomendadas', s:'bold' }, I(d.totals.unidades)],
+      ...(d.totals.volume ? [[{ v:'Volumes encomendados', s:'bold' }, I(d.totals.volume)]] : []), ...(d.totals.embalagem ? [[{ v:'Embalagens encomendadas', s:'bold' }, I(d.totals.embalagem)]] : []),
       [{ v:'Encomendas (visitas)', s:'bold' }, I(d.orderVisits)],
       [{ v:'Presença na prateleira', s:'bold' }, d.shelfN ? { v:d.shelfAvail/d.shelfN, s:'pct' } : '—'],
     ]});
     sheets.push({ name:'Encomendas por produto', freeze:1, widths:[34,12,12], rows:[ H(['Produto','Unidade','Quantidade']), ...d.orders.map(o=>[o.product, o.unit, I(o.qty)]) ]});
-    sheets.push({ name:'Prateleira', freeze:1, widths:[34,22,12,12,12,14,14,14,14,14,14,16], rows:[
-      H(['Produto','Categoria','Verificações','Disponível','Presença','Unidade média','Unidade mín.','Unidade máx.','Caixa média','Caixa mín.','Caixa máx.','Sem un./cx. (média)']),
+    sheets.push({ name:'Prateleira', freeze:1, widths:[34,22,12,12,12,14,14,14,14,14,14,16,14,16], rows:[
+      H(['Produto','Categoria','Verificações','Disponível','Presença','Unidade média','Unidade mín.','Unidade máx.','Caixa média','Caixa mín.','Caixa máx.','Sem un./cx. (média)','Volume médio','Embalagem média']),
       ...d.shelf.map(x=>{ const su = priceStat(x.pricesUnit), sb = priceStat(x.pricesBox), so = priceStat(x.pricesOther);
-        return [x.name, x.category, I(x.n), I(x.avail), x.n ? { v:x.avail/x.n, s:'pct' } : '', su?M(su.avg):'', su?M(su.min):'', su?M(su.max):'', sb?M(sb.avg):'', sb?M(sb.min):'', sb?M(sb.max):'', so?M(so.avg):'']; }),
+        return [x.name, x.category, I(x.n), I(x.avail), x.n ? { v:x.avail/x.n, s:'pct' } : '', su?M(su.avg):'', su?M(su.min):'', su?M(su.max):'', sb?M(sb.avg):'', sb?M(sb.min):'', sb?M(sb.max):'', so?M(so.avg):'', x.pricesVol.length?M(priceStat(x.pricesVol).avg):'', x.pricesEmb.length?M(priceStat(x.pricesEmb).avg):'']; }),
     ]});
     sheets.push({ name:'Distribuição numérica', freeze:3, widths:[34,22,16,16,14], rows:[
       [{ v:'% dos clientes onde o produto foi verificado e estava em stock (última verificação de cada cliente).', s:'note' }], [],
@@ -2798,7 +2911,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function ordersTotalsOf(visits){
     const totals = {}, order = [];
     visits.forEach(v=>(v.orderItems||[]).forEach(o=>{
-      const unit = o.unit==='unidades' ? 'unidades' : 'caixas'; const key = o.product + '|' + unit;
+      const unit = normOrderUnit(o.unit); const key = o.product + '|' + unit;
       if(!(key in totals)){ totals[key] = 0; order.push(key); }
       totals[key] += parseFloat(o.quantity) || 0;
     }));
@@ -2816,7 +2929,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     visits.slice().sort((a,b)=> a.timestamp<b.timestamp ? -1 : 1).forEach(v=>{
       const cn = clientById(v.clientId);
       lines.push(`• ${v.clientName}${cn && cn.clientNumber ? ' [Nº ' + cn.clientNumber + ']' : ''} (${vendorNameOf(v)}, ${fmtDateTime(v.timestamp)})${isDelivered(v) ? ' — entregue' : ' — entrega pendente'}`);
-      (v.orderItems||[]).forEach(o=>{ lines.push(`   - ${o.product}: ${o.quantity} ${o.unit==='unidades' ? 'unidades' : 'caixas'}`); });
+      (v.orderItems||[]).forEach(o=>{ lines.push(`   - ${o.product}: ${o.quantity} ${normOrderUnit(o.unit)}`); });
     });
     return `mailto:${ordersEmail()}?subject=${encodeURIComponent('Encomendas ' + label)}&body=${encodeURIComponent(lines.join('\n'))}`;
   }
@@ -3028,6 +3141,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       app.innerHTML = renderLogin();
       return;
     }
+    setTimeout(maybeAutoPlans, 0);
     if(state.session.role==='supplier' && state.suppliersLoaded && !supplierById(state.session.supplierId)){
       // acesso removido pelo gestor
       state.session = null; try{ localStorage.removeItem('visitasEmCampo.session'); }catch(e){}
@@ -3570,13 +3684,209 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
 
   const MZ_CITIES = [
-    'Maputo','Matola','Beira','Nampula','Chimoio','Nacala','Quelimane','Tete',
-    'Xai-Xai','Maxixe','Inhambane','Pemba','Lichinga','Cuamba','Dondo','Manica',
-    'Montepuez','Gurué','Chibuto','Mocuba','Marromeu','Vilankulo','Boane',
-    'Namaacha','Manhiça','Bilene','Angoche','Ilha de Moçambique','Moatize',
-    'Chókwè','Ressano Garcia',
+    'Alto Molócuè',
+    'Ancuabe',
+    'Angoche',
+    'Angónia (Ulónguè)',
+    'Balama',
+    'Báruè',
+    'Beira',
+    'Bela Vista (Matutuíne)',
+    'Bilene',
+    'Boane',
+    'Buzi',
+    'Cahora Bassa',
+    'Caia',
+    'Catandica',
+    'Changara',
+    'Chibabava',
+    'Chibuto',
+    'Chiconono',
+    'Chicualacuala',
+    'Chigubo',
+    'Chimoio',
+    'Chinde',
+    'Chiúre',
+    'Chiúta',
+    'Chókwè',
+    'Chongoene',
+    'Cuamba',
+    'Dondo',
+    'Espungabera',
+    'Funhalouro',
+    'Gilé',
+    'Gondola',
+    'Gorongosa',
+    'Govuro',
+    'Guijá',
+    'Gurué',
+    'Homoíne',
+    'Ibo',
+    'Ile',
+    'Ilha de Moçambique',
+    'Inhambane',
+    'Inharrime',
+    'Inhassoro',
+    'Jangamo',
+    'Lichinga',
+    'Lugela',
+    'Lumbo',
+    'Mabalane',
+    'Mabote',
+    'Machaze',
+    'Macia',
+    'Macomia',
+    'Maganja da Costa',
+    'Mágoè',
+    'Magude',
+    'Majune',
+    'Malema',
+    'Mandimba',
+    'Mandlakazi',
+    'Manhiça',
+    'Manica',
+    'Manjacaze',
+    'Mapai',
+    'Maputo',
+    'Marracuene',
+    'Marromeu',
+    'Marrupa',
+    'Massangena',
+    'Massinga',
+    'Massingir',
+    'Matola',
+    'Maúa',
+    'Maxixe',
+    'Meconta',
+    'Mecúfi',
+    'Mecula',
+    'Metangula',
+    'Milange',
+    'Moamba',
+    'Moatize',
+    'Mocímboa da Praia',
+    'Mocuba',
+    'Mogovolas',
+    'Moma',
+    'Monapo',
+    'Montepuez',
+    'Mopeia',
+    'Morrumbala',
+    'Morrumbene',
+    'Muanza',
+    'Mueda',
+    'Muembe',
+    'Murrupula',
+    'Mutarara',
+    'Mutuali',
+    'Nacala',
+    'Nacala-a-Velha',
+    'Nacarôa',
+    'Namaacha',
+    'Namacurra',
+    'Namapa',
+    'Nametil',
+    'Namialo',
+    'Nampula',
+    'Nhamatanda',
+    'Nhamayabué',
+    'Nicoadala',
+    'Nipepe',
+    'Pebane',
+    'Pemba',
+    'Quelimane',
+    'Quissanga',
+    'Quissico',
+    'Ressano Garcia',
+    'Ribáuè',
+    'Sanga',
+    'Songo (Cahora Bassa)',
+    'Sussundenga',
+    'Tete',
+    'Tsangano',
+    'Ulongué',
+    'Vilankulo',
+    'Xai-Xai',
+    'Zavala',
+    'Zumbo',
   ];
 
+
+  /* ----- Cidade (lista de Moçambique, por ordem alfabética) e Bairro (sugestões vindas dos clientes já registados) ----- */
+  function cityOptionsList(){ return MZ_CITIES.slice().sort((a,b)=>a.localeCompare(b,'pt')); }
+  function cityFieldHtml(prefix, value){
+    const v = String(value||'').trim();
+    const known = v ? cityOptionsList().find(c=>normKey(c)===normKey(v)) : '';
+    const other = !!v && !known;
+    return `
+      <select id="${prefix}Cidade" onchange="App.onCityChange('${prefix}')">
+        <option value="">— escolher cidade —</option>
+        ${cityOptionsList().map(c=>`<option value="${esc(c)}" ${known===c?'selected':''}>${esc(c)}</option>`).join('')}
+        <option value="__other" ${other?'selected':''}>Outra (escrever)…</option>
+      </select>
+      <input type="text" id="${prefix}CidadeOutra" placeholder="Nome da cidade ou vila" value="${other?esc(v):''}" ${other?'':'hidden'} style="margin-top:6px;" />`;
+  }
+  function readCityField(prefix){
+    const sel = document.getElementById(prefix+'Cidade'); if(!sel) return '';
+    return sel.value==='__other' ? (document.getElementById(prefix+'CidadeOutra')?.value||'').trim() : sel.value;
+  }
+  // bairros já lançados nos clientes (da cidade escolhida, se houver; senão todos), sem repetições, por ordem alfabética
+  function hoodSuggestions(city){
+    const ck = city ? areaKeyOf(city) : '';
+    const m = new Map();
+    (state.data.clients||[]).forEach(c=>{
+      const raw = String(c.neighborhood||'').trim(); if(!raw) return;
+      const k = normKey(raw);
+      const o = m.get(k) || { label:raw, inCity:false };
+      if(!ck || areaKeyOf(c.city)===ck) o.inCity = true;
+      m.set(k, o);
+    });
+    let arr = Array.from(m.values());
+    if(ck && arr.some(o=>o.inCity)) arr = arr.filter(o=>o.inCity);
+    return arr.map(o=>o.label).sort((a,b)=>a.localeCompare(b,'pt'));
+  }
+  function hoodDatalistHtml(city){ return hoodSuggestions(city).map(h=>`<option value="${esc(h)}"></option>`).join(''); }
+  /* ----- Morada a partir do GPS (OpenStreetMap / Nominatim) ----- */
+  async function reverseGeocode(lat, lng){
+    try{
+      const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), 9000);
+      const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&accept-language=pt&lat='+encodeURIComponent(lat)+'&lon='+encodeURIComponent(lng), { signal: ctrl.signal, headers:{ 'Accept':'application/json' } });
+      clearTimeout(t);
+      if(!r.ok) return null;
+      const j = await r.json(); const a = (j && j.address) || {};
+      if(!j || j.error) return null;
+      const road = a.road || a.pedestrian || a.footway || a.path || a.residential || '';
+      const street = [road, a.house_number].filter(Boolean).join(', ');
+      const hood = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.hamlet || '';
+      const cityRaw = a.city || a.town || a.municipality || a.village || a.county || '';
+      const cityKey = normKey(String(cityRaw).replace(/^(cidade|munic[ií]pio|distrito|vila)\s+d[eao]s?\s+/i,''));
+      const city = cityOptionsList().find(c=>normKey(c)===cityKey) || String(cityRaw).replace(/^(cidade|munic[ií]pio|distrito|vila)\s+d[eao]s?\s+/i,'');
+      const address = street || [hood, city].filter(Boolean).join(', ') || String(j.display_name||'').split(',').slice(0,2).join(',').trim();
+      if(!address && !hood && !city) return null;
+      return { address, hood, city };
+    }catch(e){ return null; }
+  }
+  function applyGeoToForm(prefix, geo, force){
+    if(!geo) return;
+    const put = (id, val)=>{
+      const el = document.getElementById(id); if(!el || !val) return false;
+      if(force || !el.value.trim() || el.dataset.auto==='1'){ el.value = val; el.dataset.auto = '1'; return true; }
+      return false;
+    };
+    put(prefix+'Addr', geo.address);
+    put(prefix+'Bairro', geo.hood);
+    if(geo.city){
+      const sel = document.getElementById(prefix+'Cidade');
+      if(sel && (force || !sel.value || sel.dataset.auto==='1')){
+        const known = cityOptionsList().find(c=>normKey(c)===normKey(geo.city));
+        sel.value = known || '__other'; sel.dataset.auto = '1';
+        const oth = document.getElementById(prefix+'CidadeOutra');
+        if(oth){ oth.hidden = sel.value!=='__other'; if(!known) oth.value = geo.city; }
+      }
+    }
+    const bl = document.getElementById(prefix+'BairroList');
+    if(bl) bl.innerHTML = hoodDatalistHtml(readCityField(prefix));
+  }
   function tipoEstablishmentFieldHtml(prefix, canal, selectedTipo){
     if(!canal) return '';
     const list = ESTABLISHMENT_TYPES[canal] || [];
@@ -3592,17 +3902,22 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   }
   function renderClientGpsSection(prefix){
     let gps, gpsStatus;
-    if(prefix==='ncStandalone'){ gps = state.ncStandalone.gps; gpsStatus = state.ncStandalone.gpsStatus; }
-    else if(prefix==='mgrEditClient'){ gps = state.mgrEditClient.gps; gpsStatus = state.mgrEditClient.gpsStatus; }
-    else{ gps = state.nv.newClientGps; gpsStatus = state.nv.newClientGpsStatus; }
+    let geoSt = '', hasGeo = false;
+    if(prefix==='ncStandalone'){ gps = state.ncStandalone.gps; gpsStatus = state.ncStandalone.gpsStatus; geoSt = state.ncStandalone.geoStatus; hasGeo = !!state.ncStandalone.geo; }
+    else if(prefix==='mgrEditClient'){ gps = state.mgrEditClient.gps; gpsStatus = state.mgrEditClient.gpsStatus; geoSt = state.mgrEditClient.geoStatus; hasGeo = !!state.mgrEditClient.geo; }
+    else{ gps = state.nv.newClientGps; gpsStatus = state.nv.newClientGpsStatus; geoSt = state.nv.geoStatus; hasGeo = !!state.nv.geo; }
     return `
       <button class="btn btn-secondary btn-sm" onclick="App.captureClientGps('${prefix}')">${icon('crosshair')} ${gps ? 'Localização capturada — capturar novamente' : 'Usar a minha localização atual'}</button>
       <div class="hint" style="margin-top:6px;">${
         gpsStatus==='loading' ? 'A obter localização…' :
         gps ? `Coordenadas capturadas${gps.accuracy!=null ? ` (±${gps.accuracy} m)` : ''} — usadas para confirmar visitas futuras.` :
         gpsStatus==='error' ? 'Não foi possível obter a localização. Pode continuar sem coordenadas.' :
-        'Opcional: capture a localização para confirmar visitas futuras por GPS.'
+        'Opcional: capture a localização para preencher a morada e confirmar visitas futuras por GPS.'
       }</div>
+      ${geoSt==='loading' ? `<div class="hint" style="margin-top:2px;">A obter a morada a partir do GPS…</div>` :
+        geoSt==='ok' ? `<div class="hint" style="margin-top:2px;">Morada, bairro e cidade preenchidos pelo GPS — confirme e corrija se for preciso.</div>` :
+        geoSt==='none' ? `<div class="hint" style="margin-top:2px;">Não foi possível obter a morada pelo GPS (sem internet?). Preencha à mão.</div>` : ''}
+      ${hasGeo ? `<button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="App.useGeoAddress('${prefix}')">Usar a morada do GPS</button>` : ''}
     `;
   }
   function clientNumTag(c){
@@ -3615,18 +3930,16 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         <div class="section-title">${existing ? 'Editar cliente' : 'Novo cliente'}</div>
         ${prefix==='mgrEditClient' ? `<div class="field"><label for="${prefix}Number">Número de cliente</label><input type="text" id="${prefix}Number" maxlength="20" placeholder="ex: 1024" value="${esc(c.clientNumber||'')}" /><div class="hint" style="margin-top:2px;">Atribuído e editável só pelo gestor. Tem de ser único.</div></div>` : ''}
         <div class="field"><label for="${prefix}Name">Nome do cliente</label><input type="text" id="${prefix}Name" placeholder="ex: Mercado Central de Matola" value="${esc(c.name||'')}" /></div>
-        <div class="field"><label for="${prefix}Addr">Morada</label><input type="text" id="${prefix}Addr" placeholder="ex: Av. Acordos de Lusaka, Matola" value="${esc(c.address||'')}" /></div>
+        <div class="field"><label for="${prefix}Addr">Morada</label><input type="text" id="${prefix}Addr" placeholder="ex: Av. Acordos de Lusaka, Matola" value="${esc(c.address||'')}" oninput="this.dataset.auto=''" /></div>
         <div class="row-wrap" style="gap:10px;">
           <div class="field" style="flex:1; min-width:140px;">
             <label for="${prefix}Bairro">Bairro</label>
-            <input type="text" id="${prefix}Bairro" placeholder="ex: Chamanculo" value="${esc(c.neighborhood||'')}" />
+            <input type="text" id="${prefix}Bairro" list="${prefix}BairroList" autocomplete="off" placeholder="ex: Chamanculo" value="${esc(c.neighborhood||'')}" oninput="this.dataset.auto=''" />
+            <datalist id="${prefix}BairroList">${hoodDatalistHtml(c.city||'')}</datalist>
           </div>
           <div class="field" style="flex:1; min-width:140px;">
             <label for="${prefix}Cidade">Cidade</label>
-            <input type="text" id="${prefix}Cidade" list="${prefix}CityList" placeholder="ex: Matola" value="${esc(c.city||'')}" />
-            <datalist id="${prefix}CityList">
-              ${MZ_CITIES.map(ct=>`<option value="${esc(ct)}"></option>`).join('')}
-            </datalist>
+            ${cityFieldHtml(prefix, c.city)}
           </div>
         </div>
         <div class="field"><label for="${prefix}Contact">Nome do gestor / dono</label><input type="text" id="${prefix}Contact" placeholder="ex: Sr. João Machava" value="${esc(c.contactName||'')}" /></div>
@@ -3765,11 +4078,26 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       </div>
     `;
   }
+  // categoria "Papel": o preço na prateleira ganha volume e embalagem; a encomenda é por volume ou embalagem
+  function isPaperProduct(name){
+    const p = (state.data.products||[]).find(x=>x.name===name);
+    return !!p && normKey(p.category)==='papel';
+  }
+  const ORDER_UNITS = { caixas:'Caixas', unidades:'Unidades', volume:'Volume', embalagem:'Embalagem' };
+  const ORDER_UNIT_SHORT = { caixas:'cx.', unidades:'un.', volume:'vol.', embalagem:'emb.' };
+  function normOrderUnit(u){ return ORDER_UNITS[u] ? u : 'caixas'; }
+  function orderUnitOptionsHtml(product, selected){
+    const base = isPaperProduct(product) ? ['volume','embalagem'] : ['caixas','unidades'];
+    const keep = ORDER_UNITS[selected] ? selected : '';
+    const list = keep && !base.includes(keep) ? base.concat(keep) : base;
+    const cur = keep || base[0];
+    return list.map(u=>`<option value="${u}" ${u===cur?'selected':''}>${ORDER_UNITS[u]}</option>`).join('');
+  }
   function productRowHtml(prefill){
     const p = prefill || {};
     return `
       <div class="product-row" ${(!p.priceUnit && !p.priceBox && p.price) ? `data-legacy-price="${esc(p.price)}"` : ''}>
-        <select class="nv-prod-name">${productOptionsHtml(p.product)}</select>
+        <select class="nv-prod-name" onchange="App.onProdChange(this)">${productOptionsHtml(p.product)}</select>
         <select class="nv-prod-avail">
           <option value="sim" ${p.available!==false?'selected':''}>Em stock</option>
           <option value="nao" ${p.available===false?'selected':''}>Em falta</option>
@@ -3778,6 +4106,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         <div class="prod-prices">
           <label>Preço unidade (MT)<input type="text" inputmode="decimal" class="nv-prod-unit" placeholder="ex: 55" value="${esc(p.priceUnit||'')}" /></label>
           <label>Preço caixa (MT)<input type="text" inputmode="decimal" class="nv-prod-box" placeholder="ex: 1300" value="${esc(p.priceBox||'')}" /></label>
+        </div>
+        <div class="prod-prices prod-paper" ${(isPaperProduct(p.product) || p.priceVolume || p.priceEmb) ? '' : 'hidden'}>
+          <label>Preço volume (MT)<input type="text" inputmode="decimal" class="nv-prod-vol" placeholder="ex: 280" value="${esc(p.priceVolume||'')}" /></label>
+          <label>Preço embalagem (MT)<input type="text" inputmode="decimal" class="nv-prod-emb" placeholder="ex: 1100" value="${esc(p.priceEmb||'')}" /></label>
         </div>
         ${(!p.priceUnit && !p.priceBox && p.price) ? `<div class="comp-legacy">Preço anterior: ${priceText(p.price)} (sem indicar unidade/caixa)</div>` : ''}
       </div>
@@ -3791,15 +4123,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       const product = row.querySelector('.nv-prod-name').value.trim();
       const unitRaw = row.querySelector('.nv-prod-unit').value.trim();
       const boxRaw = row.querySelector('.nv-prod-box').value.trim();
+      const volRaw = (row.querySelector('.nv-prod-vol')?.value || '').trim();
+      const embRaw = (row.querySelector('.nv-prod-emb')?.value || '').trim();
       const legacy = row.dataset.legacyPrice || '';
       const fail = msg=>{ row.classList.add('invalid'); if(!error) error = { msg, row }; };
-      if(!product){ if(unitRaw || boxRaw) fail('Escolha o produto na linha com preço.'); return; }
+      if(!product){ if(unitRaw || boxRaw || volRaw || embRaw) fail('Escolha o produto na linha com preço.'); return; }
       const u = unitRaw ? parsePriceNum(unitRaw) : null, b = boxRaw ? parsePriceNum(boxRaw) : null;
-      if((unitRaw && (u==null || u<=0)) || (boxRaw && (b==null || b<=0))){ fail('Preço inválido. Use apenas números, ex: 55 ou 55,50.'); return; }
+      const vo = volRaw ? parsePriceNum(volRaw) : null, em = embRaw ? parsePriceNum(embRaw) : null;
+      if((unitRaw && (u==null || u<=0)) || (boxRaw && (b==null || b<=0)) || (volRaw && (vo==null || vo<=0)) || (embRaw && (em==null || em<=0))){ fail('Preço inválido. Use apenas números, ex: 55 ou 55,50.'); return; }
       const it = { product, available: row.querySelector('.nv-prod-avail').value === 'sim' };
       if(unitRaw) it.priceUnit = unitRaw;
       if(boxRaw) it.priceBox = boxRaw;
-      if(!unitRaw && !boxRaw && legacy) it.price = legacy;
+      if(volRaw) it.priceVolume = volRaw;
+      if(embRaw) it.priceEmb = embRaw;
+      if(!unitRaw && !boxRaw && !volRaw && !embRaw && legacy) it.price = legacy;
       items.push(it);
     });
     return { items, error };
@@ -3808,12 +4145,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const o = prefill || {};
     return `
       <div class="order-row">
-        <select class="nv-order-name">${productOptionsHtml(o.product)}</select>
+        <select class="nv-order-name" onchange="App.onOrderProdChange(this)">${productOptionsHtml(o.product)}</select>
         <input type="number" min="0" step="1" placeholder="Qtd" class="nv-order-qty" value="${esc(o.quantity||'')}" />
-        <select class="nv-order-unit">
-          <option value="caixas" ${o.unit!=='unidades'?'selected':''}>Caixas</option>
-          <option value="unidades" ${o.unit==='unidades'?'selected':''}>Unidades</option>
-        </select>
+        <select class="nv-order-unit">${orderUnitOptionsHtml(o.product, o.unit)}</select>
         <button type="button" class="row-del" onclick="this.closest('.order-row').remove()" aria-label="Remover">×</button>
       </div>
     `;
@@ -3861,7 +4195,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   function orderItemsLine(v){
     const items = v.orderItems || [];
     if(!items.length) return '';
-    const unitLabel = u => u==='unidades' ? 'un.' : 'cx.';
+    const unitLabel = u => ORDER_UNIT_SHORT[normOrderUnit(u)];
     const text = items.map(o=>`${esc(o.product)} — ${esc(o.quantity)} ${unitLabel(o.unit)}`).join('; ');
     return `<div class="visit-notes">${icon('box')} Encomenda: ${text}</div>
       <div>${deliveryChipHtml(v)}${v.orderEditedBy ? ` <span class="chip status-neutral">Editada por ${esc(v.orderEditedBy)}${v.orderEditedAt ? ' · ' + esc(fmtDateTime(v.orderEditedAt)) : ''}</span>` : ''}</div>`;
@@ -5752,7 +6086,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     visits.forEach(v=>{
       (v.orderItems||[]).forEach(o=>{
         const qty = parseFloat(o.quantity) || 0;
-        const unit = o.unit === 'unidades' ? 'unidades' : 'caixas';
+        const unit = normOrderUnit(o.unit);
         const key = o.product + '|' + unit;
         if(!(key in totals)) order.push(key);
         totals[key] = (totals[key] || 0) + qty;
@@ -5777,7 +6111,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       const cn = clientById(v.clientId);
       lines.push(`• ${v.clientName}${cn && cn.clientNumber ? ' [Nº ' + cn.clientNumber + ']' : ''} (${vendorNameOf(v)}, ${fmtDateTime(v.timestamp)})`);
       (v.orderItems||[]).forEach(o=>{
-        const unit = o.unit === 'unidades' ? 'unidades' : 'caixas';
+        const unit = normOrderUnit(o.unit);
         lines.push(`   - ${o.product}: ${o.quantity} ${unit}`);
       });
     });
@@ -6252,7 +6586,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       .map(([name,count])=>({ name, count })).sort((a,b)=>b.count-a.count);
     const prod = {}, prodOrder = [];
     visits.forEach(v=>(v.orderItems||[]).forEach(o=>{
-      const qty = parseFloat(o.quantity)||0, unit = o.unit==='unidades' ? 'unidades' : 'caixas', key = o.product+'|'+unit;
+      const qty = parseFloat(o.quantity)||0, unit = normOrderUnit(o.unit), key = o.product+'|'+unit;
       if(!(key in prod)){ prod[key] = 0; prodOrder.push(key); }
       prod[key] += qty;
     }));
@@ -6666,7 +7000,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     visits.forEach(v=>{
       (v.orderItems||[]).forEach(o=>{
         const qty = parseFloat(o.quantity) || 0;
-        const unit = o.unit === 'unidades' ? 'unidades' : 'caixas';
+        const unit = normOrderUnit(o.unit);
         const key = o.product + '|' + unit;
         if(!(key in byProduct)) prodOrder.push(key);
         byProduct[key] = (byProduct[key]||0) + qty;
@@ -6875,7 +7209,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     planSet(which, val){
       if(which==='vendor'){ state.planVendorId = val || ''; state.planOpenDay = null; renderView(); }
       else if(which==='month'){ state.planMonth = val || monthNow(); state.planOpenDay = null; renderView(); }
-      else if(which==='perDay'){ const n = Math.max(1, Math.min(40, parseInt(val,10) || 8)); state.planPerDay = n; }
+      else if(which==='perDay'){ const n = Math.max(1, Math.min(40, parseInt(val,10) || PLAN_TARGET_PER_DAY)); state.planPerDay = n; }
       else if(which==='sat'){ state.planSat = !!val; }
       else if(which==='source'){ state.planSource = val==='auto' ? 'auto' : 'route'; renderView(); }
     },
@@ -6919,20 +7253,15 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       if(!vid || state.planBusy) return;
       if(month < monthNow()){ showToast('Escolha o mês atual ou um mês futuro.'); return; }
       const useRoute = routeRowsOf(vid).length > 0 && state.planSource!=='auto';
-      const res = useRoute ? generatePlanFromRoute(vid, month, state.planSat) : generatePlanDays(vid, month, state.planPerDay, state.planSat);
-      if(!Object.keys(res.days).length){ showToast('Já não há dias úteis neste mês.'); return; }
-      res.dedup = dedupeWeeks(res.days);
-      res.filled = fillEmptyDays(res.days, vid, state.planPerDay, useRoute);
       state.planBusy = true;
-      const old = planOf(vid, month);
-      const longest = Math.max(0, ...Object.values(res.days).map(l=>l.length));
-      const extra = useRoute ? { source:'route', routeFile:(state.data.routes && state.data.routes.fileName) || '', routeMissing: res.missing } : { source:'auto' };
-      await savePlan({ id: planId(vid, month), vendorId: vid, month, status:'draft', days: res.days, unscheduled: res.unscheduled, carried: [], perDay: useRoute ? Math.max(state.planPerDay, longest) : state.planPerDay, sat: state.planSat, portfolio: portfolioOf(vid).map(c=>c.id),
-        generatedAt: nowIso(), confirmedAt: null, prevConfirmedAt: old ? (old.confirmedAt || old.prevConfirmedAt || null) : null, filled: res.filled, dedup: res.dedup||0, ...extra });
+      let r = null;
+      try{ r = await buildAndSavePlan(vid, month, { useRoute, perDay: state.planPerDay, sat: state.planSat }); }
+      catch(e){ state.planBusy = false; showToast('Erro ao gerar a proposta.'); renderView(); return; }
       state.planBusy = false;
-      const first = Object.keys(res.days).sort().find(d=>(res.days[d]||[]).length);
+      if(!r){ showToast('Já não há dias úteis neste mês.'); renderView(); return; }
+      const first = Object.keys(r.res.days).sort().find(d=>(r.res.days[d]||[]).length);
       state.planOpenDay = first || null;
-      showToast(`Proposta gerada: ${Object.values(res.days).reduce((a,l)=>a+l.length,0)} visita(s). Reveja e confirme.`);
+      showToast(`Proposta gerada: ${Object.values(r.res.days).reduce((a,l)=>a+l.length,0)} visita(s). Reveja e confirme.`);
       renderView();
     },
     async planEdit(mut){
@@ -7050,7 +7379,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       if(items.some(o=>!(parseFloat(o.quantity) > 0))){ showToast('As quantidades têm de ser maiores que zero.'); return; }
       const dres = readDeliveryFields('ordDeliv', true, v.timestamp);
       if(dres.error){ showToast(dres.error); return; }
-      const norm = a => JSON.stringify((a||[]).map(o=>[o.product, String(parseFloat(o.quantity)), o.unit==='unidades' ? 'unidades' : 'caixas']));
+      const norm = a => JSON.stringify((a||[]).map(o=>[o.product, String(parseFloat(o.quantity)), normOrderUnit(o.unit)]));
       const changed = norm(items) !== norm(v.orderItems);
       const deliveryChanged = JSON.stringify(dres.delivery) !== JSON.stringify(v.delivery || { status:'pendente', deliveredAt:null });
       const patch = { orderItems: items, delivery: dres.delivery };
@@ -7242,6 +7571,17 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       else{ state.ncStandalone.open=false; }
       renderView();
     },
+    onProdChange(sel){
+      const row = sel.closest('.product-row'); if(!row) return;
+      const box = row.querySelector('.prod-paper'); if(!box) return;
+      box.hidden = !isPaperProduct(sel.value);
+    },
+    onOrderProdChange(sel){
+      const row = sel.closest('.order-row'); const u = row && row.querySelector('.nv-order-unit'); if(!u) return;
+      const paper = isPaperProduct(sel.value);
+      const ok = paper ? ['volume','embalagem'] : ['caixas','unidades'];
+      u.innerHTML = orderUnitOptionsHtml(sel.value, ok.includes(u.value) ? u.value : '');
+    },
     onCanalChange(prefix){
       const canalEl = document.getElementById(prefix+'Canal');
       const container = document.getElementById(prefix+'TipoContainer');
@@ -7266,18 +7606,34 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         const el = document.getElementById(prefix+'ClientGpsSection');
         if(el) el.innerHTML = renderClientGpsSection(prefix);
       };
-      target[statusKey] = 'loading'; updateUi();
+      target[statusKey] = 'loading'; target.geo = null; target.geoStatus = ''; updateUi();
       try{
         const pos = await getPosition();
         target[gpsKey] = pos; target[statusKey]='ok';
-      }catch(e){ target[statusKey]='error'; }
+      }catch(e){ target[statusKey]='error'; updateUi(); return; }
+      target.geoStatus = 'loading'; updateUi();
+      const geo = await reverseGeocode(target[gpsKey].lat, target[gpsKey].lng);
+      target.geo = geo; target.geoStatus = geo ? 'ok' : 'none';
+      applyGeoToForm(prefix, geo, false);
       updateUi();
+    },
+    useGeoAddress(prefix){
+      const target = prefix==='ncStandalone' ? state.ncStandalone : prefix==='mgrEditClient' ? state.mgrEditClient : state.nv;
+      if(target.geo){ applyGeoToForm(prefix, target.geo, true); showToast('Morada atualizada com os dados do GPS.'); }
+    },
+    onCityChange(prefix){
+      const sel = document.getElementById(prefix+'Cidade'); if(!sel) return;
+      sel.dataset.auto = '';
+      const oth = document.getElementById(prefix+'CidadeOutra');
+      if(oth){ oth.hidden = sel.value!=='__other'; if(sel.value==='__other') oth.focus(); }
+      const bl = document.getElementById(prefix+'BairroList');
+      if(bl) bl.innerHTML = hoodDatalistHtml(readCityField(prefix));
     },
     async saveNewClient(prefix){
       const name = document.getElementById(prefix+'Name')?.value.trim();
       const addr = document.getElementById(prefix+'Addr')?.value.trim();
       const neighborhood = document.getElementById(prefix+'Bairro')?.value.trim();
-      const city = document.getElementById(prefix+'Cidade')?.value.trim();
+      const city = readCityField(prefix);
       const contactName = document.getElementById(prefix+'Contact')?.value.trim();
       const phone = document.getElementById(prefix+'Phone')?.value.trim();
       const email = document.getElementById(prefix+'Email')?.value.trim();
