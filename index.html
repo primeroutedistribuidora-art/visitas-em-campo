@@ -4246,13 +4246,41 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     return { rows, total: rows.length, delivered: rows.filter(r=>r.done).length, pending: pending.length, timedN: timed.length, avg, median, min: timed.length ? timed[0] : null, max: timed.length ? timed[timed.length-1] : null,
       within24: timed.length ? timed.filter(x=>x<=86400000).length/timed.length : null, oldest, byVendor };
   }
+  // Resumo: encomendas entregues e não entregues (totais, %, por vendedor e lista das não entregues)
+  function reportDeliverySummaryHtml(st){
+    const pct = n => st.total ? Math.round(n/st.total*100) : 0;
+    const tile = (num, label, sub, color)=>`<div class="stat-tile"><div class="stat-num mono"${color ? ` style="color:${color};"` : ''}>${num}</div><div class="stat-label">${label}${sub ? `<br><span style="color:var(--ink-muted);">${sub}</span>` : ''}</div></div>`;
+    const bar = (d, p)=>`<div style="display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--surface-2); gap:2px;" role="img" aria-label="${d} entregues, ${p} não entregues">${d ? `<div style="flex:${d}; background:var(--status-good-fg);"></div>` : ''}${p ? `<div style="flex:${p}; background:var(--status-warn-fg);"></div>` : ''}</div>`;
+    const itemsOf = v => (v.orderItems||[]).map(o=>`${esc(o.product)} — ${esc(o.quantity)} ${ORDER_UNIT_SHORT[normOrderUnit(o.unit)]}`).join('; ');
+    const pend = st.rows.filter(r=>!r.done).sort((a,b)=>b.age-a.age);
+    const vend = st.byVendor.slice().sort((a,b)=>b.pending-a.pending || b.total-a.total || a.name.localeCompare(b.name));
+    return `
+      <div class="section-title" style="margin:6px 0 0;">Resumo de encomendas: entregues e não entregues</div>
+      <div class="statgrid" style="grid-template-columns:repeat(3,1fr);">
+        ${tile(String(st.total), 'Encomendas')}
+        ${tile(String(st.delivered), 'Entregues', pct(st.delivered) + '%', 'var(--status-good-fg)')}
+        ${tile(String(st.pending), 'Não entregues', pct(st.pending) + '%', st.pending ? 'var(--status-warn-fg)' : '')}
+      </div>
+      <div class="card stack" style="gap:8px;">
+        ${bar(st.delivered, st.pending)}
+        <div class="visit-meta"><span style="color:var(--status-good-fg);">●</span> Entregues <b>${st.delivered}</b> (${pct(st.delivered)}%) &nbsp; <span style="color:var(--status-warn-fg);">●</span> Não entregues <b>${st.pending}</b> (${pct(st.pending)}%)</div>
+      </div>
+      ${vend.length > 1 ? `<div class="card stack" style="gap:10px;"><div class="section-title">Por vendedor</div>
+        ${vend.map(x=>`<div class="stack" style="gap:4px;"><div class="row-wrap" style="justify-content:space-between; gap:8px;"><span class="client-name">${esc(x.name)}</span><span class="visit-meta"><b>${x.delivered}</b> entregue(s) · <b style="color:${x.pending ? 'var(--status-warn-fg)' : 'inherit'};">${x.pending}</b> não entregue(s) · ${x.total} no total</span></div>${bar(x.delivered, x.pending)}</div>`).join('')}
+      </div>` : ''}
+      ${pend.length ? `<div class="card stack" style="gap:8px;"><div class="section-title">Encomendas não entregues (${pend.length})</div>
+        ${pend.slice(0,15).map(r=>`<div class="row-wrap" style="justify-content:space-between; align-items:flex-start; gap:8px;"><div style="min-width:0;"><div class="client-name">${esc(r.client)}</div><div class="visit-meta">${esc(r.vendor)} · encomenda de ${esc(fmtDateTime(r.placed))}</div><div class="visit-meta">${itemsOf(r.v)}</div></div><span class="chip status-warn">há ${esc(fmtDur(r.age))}</span></div>`).join('')}
+        ${pend.length > 15 ? `<div class="hint" style="margin:0;">+ ${pend.length - 15} encomenda(s) mais recentes. A lista completa está na exportação (Excel/PDF).</div>` : ''}
+      </div>` : `<div class="card"><p class="hint" style="margin:0;">Todas as encomendas do período foram entregues.</p></div>`}
+    `;
+  }
   function reportDeliveryHtml(visits){
     const st = deliveryStats(visits);
     if(!st.total) return `<div class="card"><div class="section-title">Tempo de entrega das encomendas</div><p class="hint">Ainda sem encomendas neste período.</p></div>`;
     const tile = (num, label, color)=>`<div class="stat-tile"><div class="stat-num mono"${color ? ` style="color:${color};"` : ''}>${num}</div><div class="stat-label">${label}</div></div>`;
     const rows = st.byVendor.filter(x=>x.avg!=null).map(x=>({ name:x.name, count: x.avg/3600000, label: `${fmtDur(x.avg)} · ${x.timedN} entrega(s)`, tip: `${x.name}: tempo médio ${fmtDur(x.avg)} (${x.timedN} entrega(s) com data; ${x.pending} pendente(s))` }));
-    const pend = st.rows.filter(r=>!r.done).sort((a,b)=>b.age-a.age).slice(0,5);
     return `
+      ${reportDeliverySummaryHtml(st)}
       <div class="section-title" style="margin:6px 0 0;">Tempo de entrega das encomendas</div>
       <p class="hint">Tempo desde que a encomenda foi registada (data e hora da visita) até à confirmação de entrega.</p>
       <div class="statgrid">
@@ -4266,9 +4294,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         ${st.delivered > st.timedN ? `<div class="hint" style="margin:0;">${st.delivered - st.timedN} entrega(s) confirmada(s) sem data/hora não entram nas médias.</div>` : ''}
       </div>
       ${reportBarListHtml('Tempo médio de entrega por vendedor (horas)', rows, 'Ainda sem entregas confirmadas com data neste período.', { total: 1, insideAt: 80, note: 'Quanto menor, mais rápida a entrega.' })}
-      ${pend.length ? `<div class="card stack" style="gap:8px;"><div class="section-title">Entregas pendentes há mais tempo</div>
-        ${pend.map(r=>`<div class="row-wrap" style="justify-content:space-between; gap:8px;"><div style="min-width:0;"><div class="client-name">${esc(r.client)}</div><div class="visit-meta">${esc(r.vendor)} · encomenda de ${esc(fmtDateTime(r.placed))}</div></div><span class="chip status-warn">há ${esc(fmtDur(r.age))}</span></div>`).join('')}
-      </div>` : ''}
+
     `;
   }
   function deliveryFieldsHtml(prefix, delivery){
@@ -6706,6 +6732,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       [{ v:'Visitas com concorrência registada', s:'bold' }, I(d.agg.withData.length)],
       [{ v:'Visitas sem concorrentes no cliente', s:'bold' }, I(d.agg.none)],
       [{ v:'Encomendas entregues / total', s:'bold' }, d.dl.delivered + ' de ' + d.dl.total],
+      [{ v:'Encomendas entregues (%)', s:'bold' }, d.dl.total ? Math.round(d.dl.delivered/d.dl.total*100) + '%' : '—'],
+      [{ v:'Encomendas não entregues', s:'bold' }, d.dl.pending + (d.dl.total ? ' (' + Math.round(d.dl.pending/d.dl.total*100) + '%)' : '')],
       [{ v:'Tempo médio de entrega', s:'bold' }, d.dl.avg!=null ? fmtDur(d.dl.avg) : '—'],
     ]});
     // visitas por dia x vendedor
